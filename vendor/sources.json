@@ -1,0 +1,78 @@
+[
+  {
+    "name": "Plonky3",
+    "repository": "https://github.com/Plonky3/Plonky3",
+    "commit": "fb9382687f8f62f4478e1757bbdcea9036d75f51",
+    "base": "576e3f14829ddc68e7f7065fe057b7548b7f64c6432ffed6419ccc411320b9fa",
+    "tree": "42508ff11bc012c33d904c2e036896754e0d97e626c311d39539649035cf2f18",
+    "patch": "d16ab7a9ce7575a4c5b4f32a360d841ffd292352e2395f1215baf336333d17ff",
+    "executables": [
+      "create_release.sh"
+    ],
+    "archive": "https://codeload.github.com/Plonky3/Plonky3/tar.gz/fb9382687f8f62f4478e1757bbdcea9036d75f51",
+    "sha256": "baaacd6cbee94d6c0a1bdc2896292705ec2d3344b1a070babe074c7bc3cd4146"
+  },
+  {
+    "name": "Plonky3-recursion",
+    "repository": "https://github.com/Plonky3/Plonky3-recursion",
+    "commit": "64884a20bab6bf0fc35fab0105cd5e356cee117e",
+    "base": "ad5d5349091a41dbe248640429c20d4bbc4169f7d09842ce869626778f149b7c",
+    "tree": "0084e5bd41c549d00cf8a39ad8f5d913e7a0a8b85791127affa73b1f6a11c136",
+    "patch": "d128503c31a0bd8837b5552d3a7df026a736f0efa644ee304daca187f39f80a0",
+    "executables": [
+      "create_release.sh",
+      "scripts/verify_vendored_p3_whir.sh"
+    ]
+  },
+  {
+    "name": "tlsn-utils",
+    "repository": "https://github.com/tlsnotary/tlsn-utils",
+    "commit": "64722f7de999cbd41c0cab7312dade306d50ea5f",
+    "base": "9a1edcb76e5f8e83d815b2c9799a94d5c66007089a1d80deeb4bbd11af94cb57",
+    "tree": "519acc36da062311de1d2d5a96d843be5c4657ac0456c48ccf550e5a0eb27c9d",
+    "patch": "49645c6ea32cf411578987addd36be5b0245793e7f37203c889f031d11e2b7a9",
+    "executables": [
+      "web-spawn/run_tests.sh"
+    ],
+    "archive": "https://codeload.github.com/tlsnotary/tlsn-utils/tar.gz/64722f7de999cbd41c0cab7312dade306d50ea5f",
+    "sha256": "62cf56088f86006fb6b4ec2c1d7c93959e91ebfe7f98f0b265630bb9d4aedeed",
+    "patch_origin": "https://github.com/tlsnotary/tlsn-utils/pull/111/commits/42e4ea94c0267b6c3798090ba8dd53e75645f68d"
+  },
+  {
+    "name": "mpz",
+    "repository": "https://github.com/privacy-ethereum/mpz",
+    "commit": "6ebfe619490c3155a589fc6a3be83b0976de19dc",
+    "base": "d59605f49c2188b3f278b3903fc3e7bdbed9969582c36d503b8b0634e8c471d8",
+    "tree": "c726e4f7a6a1e4182a9ee0f15808aa7d78e21b2aff9719ca178182278c9c717c",
+    "patch": "fd8a109ea4bec4a7520be25a271aae0d255b8dd9f23911cc7f7fb53f81cb7fcb",
+    "executables": [
+      "crates/wasm-bench/build-wasm.sh",
+      "pre-commit-check.sh",
+      "scripts/wasm-runner.sh"
+    ],
+    "archive": "https://codeload.github.com/privacy-ethereum/mpz/tar.gz/6ebfe619490c3155a589fc6a3be83b0976de19dc",
+    "sha256": "2e5c8221b65c96055010d579218229dacf632932ee9192efc43dd9a2c0909d6c",
+    "patch_origin": "https://github.com/privacy-ethereum/mpz/pull/403"
+  },
+  {
+    "name": "tlsn",
+    "repository": "https://github.com/tlsnotary/tlsn",
+    "commit": "47aee45b53e06648c1b2ad3689b367b8c923fdec",
+    "base": "fc2f2f8fdd1be1dd286fc9eb18c30b7691cd3adaf1d2457d2fbb320d8ef9eaf6",
+    "tree": "",
+    "patch": "",
+    "executables": [
+      ".github/workflows/bench-commit.sh",
+      "crates/attestation/tests/fixtures/generate_presentation_fixture.rs",
+      "crates/examples-zk/noir/generate_test_data.rs",
+      "crates/harness/build.runner.dev.sh",
+      "crates/harness/build.sh",
+      "crates/harness/build.wasm.sh",
+      "crates/tls/client/test-ca/build-a-pki.sh",
+      "crates/wasm/build-docs.sh",
+      "crates/wasm/build.sh",
+      "pre-commit-check.sh",
+      "set_tlsn_version.rs"
+    ]
+  }
+]

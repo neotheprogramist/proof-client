@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Proof Client</title>
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="page.mjs"></script>
+  </head>
+  <body>
+    <main>
+      <h1>Proof Client</h1>
+      <p>
+        Local circuits and live HTTPS disclosure. Enter absolute file paths on the native host.
+        Output files must not exist.
+      </p>
+      <section>
+        <h2>Prove / verify</h2>
+        <p>
+          Verification returns the authenticated public statement. Compare it with your expected
+          root or other application claim.
+        </p>
+        <div class="forms">
+          <form id="prove">
+            <fieldset>
+              <legend>Prove</legend>
+              <label for="prove-circuit">Circuit path</label
+              ><input id="prove-circuit" name="circuit" type="text" required />
+              <label for="prove-witness">Witness path</label
+              ><input id="prove-witness" name="witness" type="text" required />
+              <label for="prove-output">New proof path</label
+              ><input id="prove-output" name="output" type="text" required />
+              <label for="prove-threads">Threads (optional)</label
+              ><input id="prove-threads" name="threads" type="number" min="1" step="1" />
+              <button type="submit">Prove</button>
+            </fieldset>
+            <button type="button" disabled>Cancel</button><output aria-live="polite"></output>
+          </form>
+          <form id="verify">
+            <fieldset>
+              <legend>Verify</legend>
+              <label for="verify-circuit">Trusted circuit path</label
+              ><input id="verify-circuit" name="circuit" type="text" required />
+              <label for="verify-proof">Proof path</label
+              ><input id="verify-proof" name="proof" type="text" required />
+              <label for="verify-threads">Threads (optional)</label
+              ><input id="verify-threads" name="threads" type="number" min="1" step="1" />
+              <button type="submit">Verify</button>
+            </fieldset>
+            <button type="button" disabled>Cancel</button><output aria-live="polite"></output>
+          </form>
+        </div>
+      </section>
+      <section>
+        <h2>Serve / attest</h2>
+        <p>
+          Start Serve, wait for Ready, then run Attest with the same session ID. The verifier logs
+          only selected authenticated bytes and transcript lengths. The private response contains
+          the full HTTP response. Selected balance bytes do not establish account ownership or
+          hidden JSON context.
+        </p>
+        <div class="forms">
+          <form id="serve">
+            <fieldset>
+              <legend>Serve</legend>
+              <label for="serve-listen">Listen address, e.g. 127.0.0.1:4433</label
+              ><input id="serve-listen" name="listen" type="text" required />
+              <label for="serve-cert">Verifier certificate path</label
+              ><input id="serve-cert" name="cert" type="text" required />
+              <label for="serve-key">Verifier key path</label
+              ><input id="serve-key" name="key" type="text" required />
+              <label for="serve-server-name">Expected target DNS name</label
+              ><input id="serve-server-name" name="server-name" type="text" required />
+              <label for="serve-session">Session ID</label
+              ><input
+                id="serve-session"
+                name="session"
+                type="text"
+                pattern="[A-Za-z0-9_\-]+"
+                maxlength="128"
+                required
+              />
+              <label for="serve-target-ca">Target CA path (optional)</label
+              ><input id="serve-target-ca" name="target-ca" type="text" />
+              <label for="serve-output">New redacted log path</label
+              ><input id="serve-output" name="output" type="text" required />
+              <button type="submit">Serve</button>
+            </fieldset>
+            <button type="button" disabled>Cancel</button><output aria-live="polite"></output>
+          </form>
+          <form id="attest">
+            <fieldset>
+              <legend>Attest</legend>
+              <label for="attest-request">Request JSON path</label
+              ><input id="attest-request" name="request" type="text" required />
+              <label for="attest-disclosure">Disclosure JSON path</label
+              ><input id="attest-disclosure" name="disclosure" type="text" required />
+              <label for="attest-verifier">Verifier address, e.g. 127.0.0.1:4433</label
+              ><input id="attest-verifier" name="verifier" type="text" required />
+              <label for="attest-verifier-name">Verifier certificate DNS name</label
+              ><input id="attest-verifier-name" name="verifier-name" type="text" required />
+              <label for="attest-session">Matching session ID</label
+              ><input
+                id="attest-session"
+                name="session"
+                type="text"
+                pattern="[A-Za-z0-9_\-]+"
+                maxlength="128"
+                required
+              />
+              <label for="attest-verifier-ca">Verifier CA path (optional)</label
+              ><input id="attest-verifier-ca" name="verifier-ca" type="text" />
+              <label for="attest-target-ca">Target CA path (optional)</label
+              ><input id="attest-target-ca" name="target-ca" type="text" />
+              <label for="attest-output">New private response path</label
+              ><input id="attest-output" name="output" type="text" required />
+              <button type="submit">Attest</button>
+            </fieldset>
+            <button type="button" disabled>Cancel</button><output aria-live="polite"></output>
+          </form>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

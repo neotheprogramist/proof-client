@@ -1,0 +1,32 @@
+[package]
+name = "web-spawn"
+version = "0.3.0"
+edition = "2024"
+description = "`std` spawn replacement for WASM in the browser."
+repository = "https://github.com/tlsnotary/tlsn-utils"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+no-bundler = []
+
+[target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dependencies]
+futures = { version = "0.3" }
+wasm-bindgen = { version = "0.2" }
+wasm-bindgen-futures = { version = "0.4" }
+crossbeam-channel = { version = "0.5" }
+js-sys = { version = "0.3" }
+web-sys = { version = "0.3", features = [
+    "Worker",
+    "WorkerOptions",
+    "WorkerType",
+    "Blob",
+    "Url",
+] }
+
+[target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.'dev-dependencies']
+wasm-bindgen-test = { version = "0.3" }
+
+[dev-dependencies]
+pollster = { version = "0.4", features = ["macro"] }
+futures = { version = "0.3" }

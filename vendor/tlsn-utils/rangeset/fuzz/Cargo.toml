@@ -1,0 +1,86 @@
+[package]
+name = "rangeset-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
+
+[dependencies.rangeset]
+path = ".."
+
+[[bin]]
+name = "range_union_range"
+path = "fuzz_targets/range_union_range.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "range_union_set"
+path = "fuzz_targets/range_union_set.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "range_diff_range"
+path = "fuzz_targets/range_diff_range.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "range_diff_set"
+path = "fuzz_targets/range_diff_set.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "range_intersection_set"
+path = "fuzz_targets/range_intersection_set.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "range_subset_set"
+path = "fuzz_targets/range_subset_set.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "set_union_range"
+path = "fuzz_targets/set_union_range.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "set_union_set"
+path = "fuzz_targets/set_union_set.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "set_diff_set"
+path = "fuzz_targets/set_diff_set.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "set_intersection_set"
+path = "fuzz_targets/set_intersection_set.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "set_subset_set"
+path = "fuzz_targets/set_subset_set.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "set_diff_range"
+path = "fuzz_targets/set_diff_range.rs"
+test = false
+doc = false

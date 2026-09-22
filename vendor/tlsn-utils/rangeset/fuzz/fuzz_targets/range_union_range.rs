@@ -1,0 +1,31 @@
+#![no_main]
+
+use core::ops::Range;
+
+use libfuzzer_sys::fuzz_target;
+
+use rangeset::prelude::*;
+use rangeset_fuzz::assert_invariants;
+
+fn expected_range_union(a: Range<u8>, b: Range<u8>) -> Vec<u8> {
+    let mut expected_values = a.chain(b).collect::<Vec<_>>();
+
+    expected_values.sort();
+    expected_values.dedup();
+
+    expected_values
+}
+
+fuzz_target!(|r: (Range<u8>, Range<u8>)| {
+    let (r1, r2) = r;
+
+    let expected_values = expected_range_union(r1.clone(), r2.clone());
+
+    let union = r1.union(&r2).into_set();
+
+    let actual_values = union.iter_values().collect::<Vec<_>>();
+
+    assert_eq!(expected_values, actual_values);
+
+    assert_invariants(union);
+});

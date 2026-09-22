@@ -1,0 +1,75 @@
+[workspace]
+members = ["crates/core", "crates/cli"]
+resolver = "3"
+exclude = ["vendor/Plonky3", "vendor/Plonky3-recursion", "vendor/tlsn-utils", "vendor/mpz", "vendor/tlsn"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+
+[workspace.dependencies]
+mpz-common = { git = "https://github.com/privacy-ethereum/mpz", rev = "6ebfe619490c3155a589fc6a3be83b0976de19dc", features = ["test-utils"] }
+base64 = "0.23.1"
+futures-rustls = { version = "0.26.0", default-features = false, features = ["ring", "tls12"] }
+proof-client-core = { path = "crates/core" }
+clap = { version = "4.6.7", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["arbitrary_precision", "raw_value"] }
+pest = "2.9.2"
+pest_derive = "2.9.2"
+httparse = "1.10.1"
+http = "1.5.0"
+futures = "0.3.34"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "net", "time", "io-util", "macros", "sync"] }
+tokio-util = { version = "0.7.19", features = ["compat"] }
+quinn = { version = "=0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+rcgen = "0.14.10"
+tlsn = { git = "https://github.com/tlsnotary/tlsn", rev = "47aee45b53e06648c1b2ad3689b367b8c923fdec", default-features = false, features = [
+  "mozilla-certs",
+] }
+p3-recursion = { git = "https://github.com/Plonky3/Plonky3-recursion", rev = "64884a20bab6bf0fc35fab0105cd5e356cee117e", features = [
+  "parallel",
+] }
+p3-poseidon2-circuit-air = { git = "https://github.com/Plonky3/Plonky3-recursion", rev = "64884a20bab6bf0fc35fab0105cd5e356cee117e" }
+p3-uni-stark = "=0.7.0"
+p3-batch-stark = "=0.7.0"
+p3-lookup = "=0.7.0"
+p3-air = "=0.7.0"
+thiserror = "2.0.20"
+url = "2.5.8"
+tempfile = "3.27.0"
+proptest = "1.11.0"
+wait-timeout = "0.2.1"
+sha2 = "0.11.0"
+p3-circuit = { git = "https://github.com/Plonky3/Plonky3-recursion", rev = "64884a20bab6bf0fc35fab0105cd5e356cee117e", features = [
+  "parallel",
+] }
+p3-circuit-prover = { git = "https://github.com/Plonky3/Plonky3-recursion", rev = "64884a20bab6bf0fc35fab0105cd5e356cee117e", features = [
+  "parallel",
+] }
+p3-field = "=0.7.0"
+p3-koala-bear = "=0.7.0"
+rayon = "1.12.0"
+p3-challenger = "=0.7.0"
+p3-commit = "=0.7.0"
+p3-dft = "=0.7.0"
+p3-fri = "=0.7.0"
+p3-matrix = "=0.7.0"
+p3-merkle-tree = "=0.7.0"
+p3-symmetric = "=0.7.0"
+rand = { version = "0.10.3", features = ["std_rng"] }
+
+[profile.test]
+opt-level = 3
+
+[profile.release]
+lto = true
+codegen-units = 1

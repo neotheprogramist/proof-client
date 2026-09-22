@@ -1,0 +1,19 @@
+{
+  "name": "proof-client",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "extension"
+  ],
+  "scripts": {
+    "fmt:check": "oxfmt --check README.md AGENTS.md package.json package-lock.json jsconfig.json extension crates examples vendor/README.md vendor/sources.json",
+    "lint": "oxlint --deny-warnings extension",
+    "typecheck": "tsc --project jsconfig.json"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.3.0",
+    "oxfmt": "0.70.0",
+    "oxlint": "1.85.0",
+    "typescript": "7.0.2"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "sent": [],
+  "received": [
+    {
+      "json": "/products/0/AvailableBalance"
+    },
+    {
+      "json": "/products/0/currency"
+    }
+  ]
+}

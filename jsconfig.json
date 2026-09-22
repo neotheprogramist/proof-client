@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "checkJs": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "target": "esnext",
+    "lib": ["esnext", "dom"],
+    "strict": true,
+    "noEmit": true,
+    "maxNodeModuleJsDepth": 0,
+    "types": ["chrome"]
+  },
+  "include": ["extension/**/*.mjs"],
+  "exclude": ["**/node_modules", "target"]
+}

@@ -1,0 +1,21 @@
+[package]
+name = "mpz-circuits"
+version = "0.1.0-alpha.6"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[lib]
+name = "mpz_circuits"
+
+[features]
+default = []
+aes = ["mpz-circuits-data/aes"]
+sha2 = ["mpz-circuits-data/sha2"]
+blake3 = ["mpz-circuits-data/blake3"]
+keccak = ["mpz-circuits-data/keccak"]
+
+[dependencies]
+mpz-circuits-core = { workspace = true }
+mpz-circuits-data = { workspace = true }

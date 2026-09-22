@@ -1,0 +1,58 @@
+diff --git a/circuit-prover/src/batch_stark_prover.rs b/circuit-prover/src/batch_stark_prover.rs
+index f2cf348..6719460 100644
+--- a/circuit-prover/src/batch_stark_prover.rs
++++ b/circuit-prover/src/batch_stark_prover.rs
+@@ -767,6 +767,12 @@ where
+         &self.relation
+     }
+ 
++    /// Share the checked preparation's proving data without generating a witness proof.
++    /// This is not verifier authority; callers retain `verifier()` independently.
++    pub fn prover_data(&self) -> Rc<CircuitProverData<SC>> {
++        Rc::clone(&self.circuit_prover_data)
++    }
++
+     /// Export a cheap, independently owned verifier handle.
+     pub fn verifier(&self) -> CircuitVerifier<SC> {
+         self.verifier.clone()
+diff --git a/recursion/src/types/proof.rs b/recursion/src/types/proof.rs
+index 359feea..ff5631b 100644
+--- a/recursion/src/types/proof.rs
++++ b/recursion/src/types/proof.rs
+@@ -155,6 +155,36 @@ pub struct CommonDataTargets<SC: StarkGenericConfig, Comm> {
+     pub lookups: Vec<Vec<Lookup<Val<SC>>>>,
+ }
+ 
++impl<SC: StarkGenericConfig, Comm> CommonDataTargets<SC, Comm> {
++    /// The exact key targets consumed by this recursive verifier. Callers must bind them
++    /// to independently trusted authority, directly or through a checked family relation.
++    pub fn preprocessed_commitment(&self) -> Option<&Comm> {
++        self.preprocessed.as_ref().map(|preprocessed| &preprocessed.commitment)
++    }
++}
++
++impl<SC, Comm> CommonDataTargets<SC, Comm>
++where
++    SC: StarkGenericConfig,
++    Comm: crate::prepared::ConstrainConstantCommitment<SC::Challenge,
++        Input = <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Commitment>,
++{
++    /// Bind the complete preprocessing commitment to independently retained verifier authority.
++    pub fn constrain_preprocessing(
++        &self,
++        circuit: &mut CircuitBuilder<SC::Challenge>,
++        expected: &CommonData<SC>,
++    ) -> Result<(), crate::verifier::VerificationError> {
++        match (&self.preprocessed, &expected.preprocessed) {
++            (None, None) => Ok(()),
++            (Some(target), Some(expected)) => target.commitment.constrain_constant(circuit, &expected.commitment),
++            _ => Err(crate::verifier::VerificationError::InvalidProofShape(
++                "trusted preprocessing presence mismatch".into(),
++            )),
++        }
++    }
++}
++
+ impl<SC: StarkGenericConfig, Comm> Recursive<SC::Challenge> for CommonDataTargets<SC, Comm>
+ where
+     Comm: Recursive<

@@ -1,0 +1,56 @@
+@layer base, layout;
+@layer base {
+  :root {
+    color-scheme: light dark;
+    font-family: system-ui, sans-serif;
+    /* Policy: consistent control spacing and room for manual file-path entry. */
+    --space: 1rem;
+    --form-width: 28em;
+  }
+  body {
+    margin: 0;
+  }
+  input,
+  button {
+    font: inherit;
+    padding: calc(var(--space) / 2);
+  }
+  fieldset {
+    display: grid;
+    gap: calc(var(--space) / 2);
+    border: 1px solid GrayText;
+  }
+  legend {
+    font-weight: bold;
+  }
+  input {
+    min-inline-size: 0;
+  }
+  button {
+    cursor: pointer;
+  }
+  output {
+    display: block;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}
+@layer layout {
+  main {
+    padding: var(--space);
+  }
+  section {
+    container-type: inline-size;
+    margin-block: calc(var(--space) * 2);
+  }
+  .forms {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--form-width)), 1fr));
+    gap: var(--space);
+  }
+  form {
+    display: grid;
+    align-content: start;
+    gap: var(--space);
+  }
+}

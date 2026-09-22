@@ -1,0 +1,45 @@
+[package]
+name = "serio"
+version = "0.2.1"
+edition = "2024"
+authors = ["TLSNotary Contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/tlsnotary/tlsn-utils"
+description = """
+A library providing traits and utilities for typed IO using format agnostic serialization built on serde.
+"""
+categories = ["asynchronous", "network-programming"]
+keywords = ["io", "async", "futures", "serde"]
+
+[features]
+default = ["compat", "channel", "codec", "bincode"]
+compat = ["dep:futures-sink"]
+channel = ["dep:futures-sink", "dep:futures-channel", "futures-channel/sink"]
+codec = ["dep:tokio-util", "dep:futures-io"]
+bincode = ["dep:bincode"]
+
+[dependencies]
+bytes.workspace = true
+serde.workspace = true
+pin-project-lite.workspace = true
+futures-core.workspace = true
+futures-io = { workspace = true, optional = true }
+futures-channel = { workspace = true, optional = true }
+futures-sink = { workspace = true, optional = true }
+futures-util = { workspace = true, features = ["bilock", "unstable"] }
+tokio-util = { workspace = true, features = [
+    "codec",
+    "compat",
+], optional = true }
+bincode = { workspace = true, optional = true }
+
+[dev-dependencies]
+futures.workspace = true
+serde = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true, features = ["codec"] }
+
+[[example]]
+name = "tokio_codec"
+path = "examples/tokio_codec.rs"
+required-features = ["codec"]

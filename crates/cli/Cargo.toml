@@ -1,0 +1,40 @@
+[package]
+name = "proof-client"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+proof-client-core.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+tempfile.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+p3-field.workspace = true
+p3-koala-bear.workspace = true
+p3-symmetric.workspace = true
+httparse.workspace = true
+tokio = { workspace = true, features = ["process"] }
+rcgen.workspace = true
+futures.workspace = true
+futures-rustls.workspace = true
+tokio-util.workspace = true
+proptest.workspace = true
+wait-timeout.workspace = true
+
+[[example]]
+name = "certificates"
+path = "../../examples/mbank/certificates.rs"
+
+[[example]]
+name = "fixture"
+path = "../../examples/mbank/fixture.rs"

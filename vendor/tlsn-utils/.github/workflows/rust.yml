@@ -1,0 +1,85 @@
+name: Rust
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+  RUST_VERSION: "1.93.0"
+
+jobs:
+  build_and_test:
+    name: Build and test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy
+
+      - name: Use caching
+        uses: Swatinem/rust-cache@v2.7.7
+
+      - name: Clippy
+        run: cargo clippy --all-features --all-targets -- -D warnings
+
+      - name: Build
+        run: cargo build
+
+      - name: "Test"
+        # Run all tests (bins, examples, lib, integration and docs)
+        # https://doc.rust-lang.org/cargo/commands/cargo-test.html#target-selection
+        run: cargo test
+
+      - name: "Check documentation"
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --document-private-items --all-features --workspace --examples
+
+  rustfmt:
+    name: Check formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2.7.7
+      - name: Check formatting
+        run: cargo fmt --check --all
+
+  wasm:
+    name: Build and Test web-spawn (wasm)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install nightly rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown,x86_64-unknown-linux-gnu
+          # Pin nightly due to rustc regression with wasm32 shared memory
+          # See: https://github.com/wasm-bindgen/wasm-bindgen/issues/4727
+          toolchain: "nightly-2025-09-24"
+          components: rust-src
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Use caching
+        uses: Swatinem/rust-cache@v2.7.7
+
+      - name: Run tests
+        run: |
+          cd web-spawn
+          ./run_tests.sh

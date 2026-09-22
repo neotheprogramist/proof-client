@@ -1,0 +1,8 @@
+[package]
+name = "futures-plex"
+version = "0.1.0"
+edition = "2024"
+description = "Port of tokio's `SimplexStream` and `DuplexStream` for the `futures` ecosystem."
+
+[dependencies]
+futures = { version = "0.3", default-features = false, features = ["unstable", "bilock", "executor"] }

@@ -1,0 +1,280 @@
+diff --git a/crates/common/src/context.rs b/crates/common/src/context.rs
+--- a/crates/common/src/context.rs
++++ b/crates/common/src/context.rs
+@@ -8,6 +8,7 @@
+ use futures::{
+     AsyncRead, AsyncWrite,
+     future::{self, BoxFuture, Either},
++    stream::{self, StreamExt, TryStreamExt},
+ };
+ 
+ #[cfg(any(test, feature = "test-utils"))]
+@@ -20,6 +21,9 @@
+ };
+ 
+ use crate::{ContextId, executor::Inner, io::Io, mux::Mux};
++
++// Policy: upstream PR #403 bounds map concurrency; both peers use the same limit.
++const MAP_CONCURRENCY: usize = 32;
+ 
+ /// A task execution context.
+ ///
+@@ -180,27 +184,39 @@
+         T: Send + 'static,
+         R: Send + 'static,
+     {
+-        if matches!(self.mode, Mode::Single) {
+-            let mut results = Vec::with_capacity(items.len());
+-            for item in items {
+-                results.push(f(self, item).await);
++        let (mux, executor) = match &self.mode {
++            Mode::Single => {
++                let mut results = Vec::with_capacity(items.len());
++                for item in items {
++                    results.push(f(self, item).await);
++                }
++                return Ok(results);
+             }
+-            return Ok(results);
+-        }
+-
++            Mode::Multi { mux, executor } => (mux.clone(), executor.clone()),
++        };
+         let parent_id = self.next_fork();
+-        let executor = self.executor().cloned();
+-        let mut tasks = Vec::with_capacity(items.len());
+-        for (i, item) in items.into_iter().enumerate() {
+-            let i = u32::try_from(i).expect("more than u32::MAX items");
+-            let mut ctx = self.child(parent_id.child(i))?;
+-            let f = f.clone();
+-            tasks.push(run(
+-                executor.as_ref(),
+-                async move { f(&mut ctx, item).await },
+-            ));
+-        }
+-        Ok(future::join_all(tasks).await)
++        stream::iter(items.into_iter().enumerate())
++            .map(move |(i, item)| {
++                let i = u32::try_from(i).expect("more than u32::MAX items");
++                let id = parent_id.child(i);
++                let (mux, executor, f) = (mux.clone(), executor.clone(), f.clone());
++                async move {
++                    let io = mux.open(id.as_ref()).map_err(ContextError::mux)?;
++                    let mut ctx = Context {
++                        id,
++                        io,
++                        mode: Mode::Multi {
++                            mux,
++                            executor: executor.clone(),
++                        },
++                        fork_counter: 0,
++                    };
++                    run(executor.as_ref(), async move { f(&mut ctx, item).await }).await
++                }
++            })
++            .buffered(MAP_CONCURRENCY)
++            .try_collect()
++            .await
+     }
+ 
+     /// Runs `a` and `b` concurrently and returns both results.
+@@ -224,7 +240,7 @@
+ 
+         let task_a = run(executor.as_ref(), async move { a(&mut ctx_a).await });
+         let task_b = run(executor.as_ref(), async move { b(&mut ctx_b).await });
+-        Ok(future::join(task_a, task_b).await)
++        future::try_join(task_a, task_b).await
+     }
+ 
+     /// Like [`Context::join`], but short-circuits as soon as either branch
+@@ -255,9 +271,9 @@
+         let mut ctx_a = self.child(parent_id.child(0))?;
+         let mut ctx_b = self.child(parent_id.child(1))?;
+ 
+-        let task_a = run(executor.as_ref(), async move { a(&mut ctx_a).await });
+-        let task_b = run(executor.as_ref(), async move { b(&mut ctx_b).await });
+-        Ok(future::try_join(task_a, task_b).await)
++        let task_a = try_run(executor.as_ref(), async move { a(&mut ctx_a).await });
++        let task_b = try_run(executor.as_ref(), async move { b(&mut ctx_b).await });
++        context_result(future::try_join(task_a, task_b).await)
+     }
+ 
+     /// Same as [`Context::try_join`], but with three branches.
+@@ -292,10 +308,10 @@
+         let mut ctx_b = self.child(parent_id.child(1))?;
+         let mut ctx_c = self.child(parent_id.child(2))?;
+ 
+-        let task_a = run(executor.as_ref(), async move { a(&mut ctx_a).await });
+-        let task_b = run(executor.as_ref(), async move { b(&mut ctx_b).await });
+-        let task_c = run(executor.as_ref(), async move { c(&mut ctx_c).await });
+-        Ok(future::try_join3(task_a, task_b, task_c).await)
++        let task_a = try_run(executor.as_ref(), async move { a(&mut ctx_a).await });
++        let task_b = try_run(executor.as_ref(), async move { b(&mut ctx_b).await });
++        let task_c = try_run(executor.as_ref(), async move { c(&mut ctx_c).await });
++        context_result(future::try_join3(task_a, task_b, task_c).await)
+     }
+ 
+     /// Same as [`Context::try_join`], but with four branches.
+@@ -335,11 +351,11 @@
+         let mut ctx_c = self.child(parent_id.child(2))?;
+         let mut ctx_d = self.child(parent_id.child(3))?;
+ 
+-        let task_a = run(executor.as_ref(), async move { a(&mut ctx_a).await });
+-        let task_b = run(executor.as_ref(), async move { b(&mut ctx_b).await });
+-        let task_c = run(executor.as_ref(), async move { c(&mut ctx_c).await });
+-        let task_d = run(executor.as_ref(), async move { d(&mut ctx_d).await });
+-        Ok(future::try_join4(task_a, task_b, task_c, task_d).await)
++        let task_a = try_run(executor.as_ref(), async move { a(&mut ctx_a).await });
++        let task_b = try_run(executor.as_ref(), async move { b(&mut ctx_b).await });
++        let task_c = try_run(executor.as_ref(), async move { c(&mut ctx_c).await });
++        let task_d = try_run(executor.as_ref(), async move { d(&mut ctx_d).await });
++        context_result(future::try_join4(task_a, task_b, task_c, task_d).await)
+     }
+ 
+     fn executor(&self) -> Option<&Arc<Inner>> {
+@@ -351,32 +367,59 @@
+     }
+ }
+ 
+-/// Spawns `fut` on `executor` if one is provided, otherwise yields the future
+-/// as-is. The output type is identical either way.
+-fn run<F>(
+-    executor: Option<&Arc<Inner>>,
+-    fut: F,
+-) -> impl std::future::Future<Output = F::Output> + Send
++async fn run<F>(executor: Option<&Arc<Inner>>, fut: F) -> Result<F::Output, ContextError>
+ where
+     F: std::future::Future + Send + 'static,
+     F::Output: Send + 'static,
+ {
+     match executor {
+-        Some(exec) => Either::Left(crate::executor::spawn_on(exec, fut)),
+-        None => Either::Right(fut),
++        Some(exec) => crate::executor::spawn_on(exec, fut)
++            .fallible()
++            .await
++            .ok_or(ContextError::Cancelled),
++        None => Ok(fut.await),
++    }
++}
++
++async fn try_run<F, T, E>(
++    executor: Option<&Arc<Inner>>,
++    fut: F,
++) -> Result<T, Either<ContextError, E>>
++where
++    F: std::future::Future<Output = Result<T, E>> + Send + 'static,
++    T: Send + 'static,
++    E: Send + 'static,
++{
++    match run(executor, fut).await {
++        Ok(Ok(value)) => Ok(value),
++        Ok(Err(error)) => Err(Either::Right(error)),
++        Err(error) => Err(Either::Left(error)),
++    }
++}
++
++fn context_result<T, E>(
++    result: Result<T, Either<ContextError, E>>,
++) -> Result<Result<T, E>, ContextError> {
++    match result {
++        Ok(value) => Ok(Ok(value)),
++        Err(Either::Right(error)) => Ok(Err(error)),
++        Err(Either::Left(error)) => Err(error),
+     }
+ }
+ 
+ /// Error for [`Context`].
+ #[derive(Debug, thiserror::Error)]
+-#[error("context mux error")]
+-pub struct ContextError {
+-    #[source]
+-    source: std::io::Error,
++pub enum ContextError {
++    /// Opening a context channel failed.
++    #[error("context mux error")]
++    Mux(#[source] std::io::Error),
++    /// The executor cancelled a task.
++    #[error("context task cancelled")]
++    Cancelled,
+ }
+ 
+ impl ContextError {
+     fn mux(source: std::io::Error) -> Self {
+-        Self { source }
+-    }
+-}
++        Self::Mux(source)
++    }
++}
+diff --git a/crates/common/src/executor.rs b/crates/common/src/executor.rs
+--- a/crates/common/src/executor.rs
++++ b/crates/common/src/executor.rs
+@@ -260,27 +260,10 @@
+         ExecutorBuilder::default()
+     }
+ 
+-    /// Shuts down the executor.
+-    ///
+-    /// Sets the shutdown flag, drains the global queue, and unparks every
+-    /// worker. After this returns, no further runnables will be accepted by
+-    /// the scheduler (newly woken tasks are dropped on arrival), and any
+-    /// runnables still queued at the moment of shutdown are dropped. Dropping
+-    /// a [`Runnable`] cancels its task, so awaiters of `Task<T>` propagate
+-    /// cancellation rather than hanging on a worker that has exited.
++    /// Stops workers and cancels queued or subsequently woken tasks.
+     pub fn shutdown(&self) {
+         self.inner.shutdown.store(true, Ordering::SeqCst);
+-
+-        // Drain the injector before unparking workers. Any push that races
+-        // with this drain is handled by the shutdown check in the schedule
+-        // callback (see `spawn_on`), which drops the runnable.
+-        loop {
+-            match self.inner.injector.steal() {
+-                Steal::Success(_) => continue,
+-                Steal::Empty => break,
+-                Steal::Retry => continue,
+-            }
+-        }
++        self.inner.drain();
+ 
+         for w in self.inner.workers.iter() {
+             w.unparker.unpark();
+@@ -309,6 +292,17 @@
+     }
+ }
+ 
++impl Inner {
++    fn drain(&self) {
++        loop {
++            match self.injector.steal() {
++                Steal::Success(_) | Steal::Retry => continue,
++                Steal::Empty => break,
++            }
++        }
++    }
++}
++
+ impl Drop for Executor {
+     fn drop(&mut self) {
+         self.shutdown();
+@@ -323,16 +317,12 @@
+ {
+     let inner = Arc::clone(inner);
+     let schedule = move |runnable: Runnable| {
+-        // After shutdown, no worker will run this. Dropping the runnable
+-        // cancels the task so the awaiter doesn't hang. SeqCst pairs with
+-        // the SeqCst store in `Executor::shutdown` to ensure that any push
+-        // that "loses" the race is then drained by shutdown's pass over
+-        // the injector.
++        // Enqueue first: either this producer or shutdown must drain the task.
++        inner.injector.push(runnable);
+         if inner.shutdown.load(Ordering::SeqCst) {
+-            drop(runnable);
++            inner.drain();
+             return;
+         }
+-        inner.injector.push(runnable);
+         // Scan for an idle worker and claim it for this notification. The
+         // `load` is a cheap filter; the `compare_exchange` is what makes the
+         // claim race-free against other concurrent producers. Stops at the
