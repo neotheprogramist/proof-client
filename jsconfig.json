@@ -4,7 +4,7 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "target": "esnext",
-    "lib": ["esnext", "dom"],
+    "lib": ["esnext", "dom", "dom.iterable"],
     "strict": true,
     "noEmit": true,
     "maxNodeModuleJsDepth": 0,

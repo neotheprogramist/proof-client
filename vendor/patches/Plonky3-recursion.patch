@@ -1,3 +1,18 @@
+diff --git a/circuit/src/builder/compiler/optimizer/dedup.rs b/circuit/src/builder/compiler/optimizer/dedup.rs
+index 0c3a118..8f42fdb 100644
+--- a/circuit/src/builder/compiler/optimizer/dedup.rs
++++ b/circuit/src/builder/compiler/optimizer/dedup.rs
+@@ -47,6 +47,10 @@ impl Deduplicator {
+             result.push(op);
+         }
+ 
++        // Earlier operations can read a witness whose producer was deduplicated later.
++        for op in &mut result {
++            op.apply_witness_rewrite(&self.rewrite);
++        }
+         (result, self.rewrite)
+     }
+ 
 diff --git a/circuit-prover/src/batch_stark_prover.rs b/circuit-prover/src/batch_stark_prover.rs
 index f2cf348..6719460 100644
 --- a/circuit-prover/src/batch_stark_prover.rs

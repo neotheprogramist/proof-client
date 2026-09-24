@@ -2,7 +2,7 @@ use crate::files::{FileError, Output, read};
 use crate::{identity::IdentityError, stdio};
 use clap::{Args, Parser, Subcommand};
 use proof_client_core::{
-    proof::{self as prover, Artifact, Circuit, Job},
+    proof::{self as prover, Artifact, Job, PublicInput},
     tls::{attest, disclosure::Disclosure, quic},
 };
 use serde_json::{Value, json};
@@ -39,10 +39,21 @@ struct Invocation {
 }
 #[derive(Subcommand)]
 pub enum Command {
-    /// Prove a circuit with the supplied assignment.
+    /// Prepare circuit and verifier-set IDs.
+    Prepare {
+        #[arg(long)]
+        circuit: PathBuf,
+        #[arg(long)]
+        threads: Option<NonZeroUsize>,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Prove the supplied statement.
     Prove {
         #[arg(long)]
         circuit: PathBuf,
+        #[arg(long)]
+        public: PathBuf,
         #[arg(long)]
         witness: PathBuf,
         #[arg(long)]
@@ -50,18 +61,20 @@ pub enum Command {
         #[arg(long)]
         output: PathBuf,
     },
-    /// Verify against supplied circuit source; return public words.
+    /// Verify the supplied statement.
     Verify {
         #[arg(long)]
         circuit: PathBuf,
+        #[arg(long)]
+        public: PathBuf,
         #[arg(long)]
         proof: PathBuf,
         #[arg(long)]
         threads: Option<NonZeroUsize>,
     },
-    /// Send one HTTPS request using MPC-TLS and an explicit disclosure policy.
+    /// Attest selected HTTPS transcript bytes.
     Attest(Attest),
-    /// Accept one authenticated QUIC/TLSN session, report its disclosure and exit.
+    /// Verify and log one TLSN disclosure.
     Serve {
         #[arg(long)]
         listen: SocketAddr,
@@ -83,13 +96,22 @@ pub enum Command {
 impl Command {
     fn admit_native(self) -> Result<Self, CliError> {
         let paths = match &self {
+            Self::Prepare {
+                circuit, output, ..
+            } => vec![circuit, output],
             Self::Prove {
                 circuit,
+                public,
                 witness,
                 output,
                 ..
-            } => vec![circuit, witness, output],
-            Self::Verify { circuit, proof, .. } => vec![circuit, proof],
+            } => vec![circuit, public, witness, output],
+            Self::Verify {
+                circuit,
+                public,
+                proof,
+                ..
+            } => vec![circuit, public, proof],
             Self::Serve {
                 cert,
                 key,
@@ -200,31 +222,45 @@ pub fn execute(
     mut ready: impl FnMut(SocketAddr) -> Result<(), CliError>,
 ) -> Result<Value, CliError> {
     match command {
+        Command::Prepare {
+            circuit,
+            threads,
+            output,
+        } => {
+            let out = Output::prepare(&output)?;
+            let metadata = prover::prepare(crate::files::circuit(&circuit)?, workers(threads)?)?;
+            let result = json!({"output": out.path(), "metadata": metadata});
+            out.publish(&metadata)?;
+            Ok(result)
+        }
         Command::Prove {
             circuit,
+            public,
             witness,
             threads,
             output,
         } => {
             let out = Output::prepare(&output)?;
-            let circuit = Circuit::parse(&read(&circuit, prover::MAX_INPUT_BYTES)?)?;
-            let job = Job::parse(circuit, &read(&witness, prover::MAX_JOB_BYTES)?)?;
+            let circuit = crate::files::circuit(&circuit)?;
+            let public = PublicInput::parse(&read(&public, prover::MAX_INPUT_BYTES)?)?;
+            let job = Job::parse(circuit, public, &read(&witness, prover::MAX_WITNESS_BYTES)?)?;
             let proof = prover::prove(job, workers(threads)?)?;
-            let result =
-                json!({"output": out.path(), "circuit": proof.circuit(), "public": proof.public()});
+            let result = json!({"output": out.path(), "circuit_id": proof.circuit_id(), "public": proof.public()});
             out.publish(&proof)?;
             Ok(result)
         }
         Command::Verify {
             circuit,
+            public,
             proof,
             threads,
         } => {
-            let circuit = Circuit::parse(&read(&circuit, prover::MAX_INPUT_BYTES)?)?;
+            let circuit = crate::files::circuit(&circuit)?;
+            let public = PublicInput::parse(&read(&public, prover::MAX_INPUT_BYTES)?)?;
             let proof = Artifact::parse(&read(&proof, prover::MAX_PROOF_BYTES)?)?;
-            let id = proof.circuit().to_owned();
-            let public = prover::verify(circuit, proof, workers(threads)?)?;
-            Ok(json!({"circuit": id, "public": public}))
+            let id = proof.circuit_id();
+            let public = prover::verify(circuit, public, proof, workers(threads)?)?;
+            Ok(json!({"circuit_id": id, "public": public}))
         }
         Command::Serve {
             listen,

@@ -36,7 +36,7 @@ pub(crate) fn backend() -> Backend {
 }
 
 pub(crate) fn canonical_config() -> Result<Config, Error> {
-    // Public preprocessing only; private witnesses use independent cryptographic randomness.
+    // Public preprocessing; witness RNGs are independent.
     Ok(Config::new(
         StdRng::seed_from_u64(0),
         StdRng::seed_from_u64(1),

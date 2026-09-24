@@ -6,13 +6,15 @@ examples, documentation and licenses. They are nested upstream workspaces exclud
 from the consumer workspace. [patches.toml](patches.toml) selects the dependency graph through
 `.cargo/config.toml`'s single required `include`.
 
-The cryptographic patches change four source files:
+The cryptographic patches change five source files:
 
 - `Plonky3/fri/src/hiding_pcs.rs`: release the hiding RNG lock before nested Rayon work.
 - `Plonky3/merkle-tree/src/hiding_mmcs.rs`: the same lock-scope correction for salts.
 - `Plonky3-recursion/recursion/src/types/proof.rs`: constrain a recursive child's
   preprocessing commitment to its independently prepared verifier, and expose those exact
-  targets for checked in-circuit family membership.
+  targets for checked in-circuit verifier-set membership.
+- `Plonky3-recursion/circuit/src/builder/compiler/optimizer/dedup.rs`: apply
+  final witness rewrites to earlier operations after deduplication.
 - `Plonky3-recursion/circuit-prover/src/batch_stark_prover.rs`: export prepared
   proving data without generating an unused proof.
 
@@ -33,6 +35,7 @@ TLSNotary alpha.15 also needs transport/scheduling patches:
 
 The complete forward differences are in [patches](patches). No source is patched
 at build time. Never run consumer formatting over these upstream trees.
+The TLSNotary patch also unignores its harness index so clones retain the complete tree.
 
 The provenance test checks the patched tree and patch SHA-256, reverses each patch
 in a temporary directory, and compares the reconstructed tree to the pinned-source
@@ -41,14 +44,4 @@ by a zero byte and the SHA-256 of its contents. These revisions contain no symli
 Executable file paths are recorded separately and checked on Unix. The hashes detect
 local drift; the commit and upstream archive identify the source of authority.
 
-To switch to upstream sources, set `include = []` in `.cargo/config.toml` and run
-`cargo update` from the repository root. Re-enable the include to select the local
-patches again, then update the lockfile. Cargo has no workspace-wide patch wildcard;
-the per-crate mapping stays in one file.
-
-Unpatched sources are not currently a supported build: the consumer requires the
-recursive commitment-target and prepared-data APIs above. Switch only after those
-APIs, lock fixes and TLS lifecycle fixes are available upstream, then run all README gates. Cargo
-configuration is discovered from the working directory; run Cargo from this repository.
-
-Run `cargo test --locked -p proof-client-core --test vendor` from the repository root.
+The workspace tests include the provenance check; see [setup and checks](../README.md#setup-and-checks).

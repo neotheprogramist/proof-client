@@ -17,8 +17,7 @@
       <section>
         <h2>Prove / verify</h2>
         <p>
-          Verification returns the authenticated public statement. Compare it with your expected
-          root or other application claim.
+          Verification checks the proof against the trusted circuit and your expected public input.
         </p>
         <div class="forms">
           <form id="prove">
@@ -30,6 +29,8 @@
               ><input id="prove-witness" name="witness" type="text" required />
               <label for="prove-output">New proof path</label
               ><input id="prove-output" name="output" type="text" required />
+              <label for="prove-public">Public input JSON path</label
+              ><input id="prove-public" name="public" type="text" required />
               <label for="prove-threads">Threads (optional)</label
               ><input id="prove-threads" name="threads" type="number" min="1" step="1" />
               <button type="submit">Prove</button>
@@ -43,6 +44,8 @@
               ><input id="verify-circuit" name="circuit" type="text" required />
               <label for="verify-proof">Proof path</label
               ><input id="verify-proof" name="proof" type="text" required />
+              <label for="verify-public">Public input JSON path</label
+              ><input id="verify-public" name="public" type="text" required />
               <label for="verify-threads">Threads (optional)</label
               ><input id="verify-threads" name="threads" type="number" min="1" step="1" />
               <button type="submit">Verify</button>
@@ -54,10 +57,9 @@
       <section>
         <h2>Serve / attest</h2>
         <p>
-          Start Serve, wait for Ready, then run Attest with the same session ID. The verifier logs
-          only selected authenticated bytes and transcript lengths. The private response contains
-          the full HTTP response. Selected balance bytes do not establish account ownership or
-          hidden JSON context.
+          Start Serve, wait for Ready, then run Attest with the same session ID. The verifier
+          receives selected bytes and transcript lengths; the private output contains the full
+          response.
         </p>
         <div class="forms">
           <form id="serve">

@@ -15,16 +15,17 @@ for (const form of document.querySelectorAll("form")) {
     event.preventDefault();
     const controller = new AbortController();
     const abort = () => controller.abort();
-    cancel.addEventListener("click", abort, { once: true });
-    window.addEventListener("pagehide", abort, { once: true });
-    const args = [form.id];
-    for (const input of form.querySelectorAll("input")) {
-      if (input.value !== "") args.push(`--${input.name}`, input.value);
-    }
-    fields.disabled = true;
-    cancel.disabled = false;
-    output.textContent = "Running…";
     try {
+      const args = [form.id];
+      for (const [name, value] of new FormData(form)) {
+        if (typeof value !== "string") throw new NativeError("Expected a file path");
+        if (value !== "") args.push(`--${name}`, value);
+      }
+      cancel.addEventListener("click", abort, { once: true });
+      window.addEventListener("pagehide", abort, { once: true });
+      fields.disabled = true;
+      cancel.disabled = false;
+      output.textContent = "Running…";
       const result = await invoke(
         args,
         (address) => {

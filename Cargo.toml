@@ -21,7 +21,7 @@ futures-rustls = { version = "0.26.0", default-features = false, features = ["ri
 proof-client-core = { path = "crates/core" }
 clap = { version = "4.6.7", features = ["derive"] }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = { version = "1.0.151", features = ["arbitrary_precision", "raw_value"] }
+serde_json = { version = "1.0.151", features = ["arbitrary_precision"] }
 pest = "2.9.2"
 pest_derive = "2.9.2"
 httparse = "1.10.1"

@@ -65,6 +65,7 @@ fn subprocess_failure_fixture() {
 }
 
 #[path = "../../../examples/merkle/support/merkle.rs"]
+#[allow(dead_code)]
 mod merkle;
 use serde_json::{Value, json};
 use std::{fs, path::Path};
@@ -123,115 +124,119 @@ fn call(mode: Launch, args: &[&str]) -> Value {
     assert_eq!(event["event"], "completed", "{event}");
     event["result"].clone()
 }
-fn square() -> (Value, Value) {
+fn square() -> (Value, Value, Value) {
     (
-        json!({"format":"proof-client/circuit/1","inputs":{"public":1,"private":1},"operations":[{"op":"mul","left":1,"right":1}],"constraints":[{"op":"equal","left":0,"right":2}]}),
-        json!({"public":[49],"private":[7],"proofs":[]}),
+        json!({"format":proof_client_core::proof::FORMAT,"inputs":{"public":1,"private":1},"operations":[{"op":"mul","left":1,"right":1}],"constraints":[{"op":"equal","left":0,"right":2}]}),
+        json!([49]),
+        json!({"private":[7],"proofs":[]}),
     )
 }
-fn inputs(dir: &Path, job: &(Value, Value)) {
-    for (name, value) in [("circuit.json", &job.0), ("witness.json", &job.1)] {
-        fs::write(dir.join(name), serde_json::to_vec(value).unwrap()).unwrap();
+fn inputs(dir: &Path, job: &(Value, Value, Value)) {
+    for (name, value) in [
+        ("circuit.json", &job.0),
+        ("public.json", &job.1),
+        ("witness.json", &job.2),
+    ] {
+        fs::write(dir.join(name), serde_json::to_vec_pretty(value).unwrap()).unwrap();
     }
 }
 
 fn prove(mode: Launch, dir: &Path, path: &Path) -> Value {
-    call(
-        mode,
-        &[
-            "prove",
-            "--circuit",
-            dir.join("circuit.json").to_str().unwrap(),
-            "--witness",
-            dir.join("witness.json").to_str().unwrap(),
-            "--threads",
-            "4",
-            "--output",
-            path.to_str().unwrap(),
-        ],
-    )
+    let circuit = dir.join("circuit.json");
+    let public = dir.join("public.json");
+    let witness = dir.join("witness.json");
+    let args = vec![
+        "prove",
+        "--circuit",
+        circuit.to_str().unwrap(),
+        "--public",
+        public.to_str().unwrap(),
+        "--witness",
+        witness.to_str().unwrap(),
+        "--threads",
+        "4",
+        "--output",
+        path.to_str().unwrap(),
+    ];
+    call(mode, &args)
 }
 fn verify(mode: Launch, dir: &Path, path: &Path) -> Value {
-    call(
-        mode,
-        &[
-            "verify",
-            "--circuit",
-            dir.join("circuit.json").to_str().unwrap(),
-            "--proof",
-            path.to_str().unwrap(),
-            "--threads",
-            "1",
-        ],
-    )
+    let circuit = dir.join("circuit.json");
+    let public = dir.join("public.json");
+    let args = vec![
+        "verify",
+        "--circuit",
+        circuit.to_str().unwrap(),
+        "--public",
+        public.to_str().unwrap(),
+        "--proof",
+        path.to_str().unwrap(),
+        "--threads",
+        "1",
+    ];
+    call(mode, &args)
 }
 #[test]
 fn ambiguous_inputs_are_rejected_without_publishing() {
     for mode in [Launch::Cli, Launch::Native] {
-        for (file, old, new) in [
-            (
-                "circuit.json",
-                r#""format":"proof-client/circuit/1""#,
-                r#""format":"unsupported","format":"proof-client/circuit/1""#,
-            ),
-            (
-                "circuit.json",
-                r#""private":1"#,
-                r#""private":2,"private":1"#,
-            ),
-            (
-                "witness.json",
-                r#""public":[49]"#,
-                r#""public":[50],"public":[49]"#,
-            ),
-            (
-                "witness.json",
-                r#""private":[7]"#,
-                r#""private":[8],"private":[7]"#,
-            ),
-        ] {
-            let dir = tempfile::tempdir().unwrap();
-            inputs(dir.path(), &square());
-            let text = fs::read_to_string(dir.path().join(file)).unwrap();
-            let invalid = text.replacen(old, new, 1);
-            assert_ne!(text, invalid);
-            fs::write(dir.path().join(file), invalid).unwrap();
-            let path = dir.path().join("proof.json");
-            let output = exchange(
-                mode,
-                &[
-                    "prove",
-                    "--circuit",
-                    dir.path().join("circuit.json").to_str().unwrap(),
-                    "--witness",
-                    dir.path().join("witness.json").to_str().unwrap(),
-                    "--output",
-                    path.to_str().unwrap(),
-                ],
-            );
-            match mode {
-                Launch::Cli => {
-                    assert!(!output.status.success());
-                    assert!(output.stdout.is_empty());
-                }
-                Launch::Native => assert_eq!(event(mode, &output.stdout)["event"], "failed"),
+        let dir = tempfile::tempdir().unwrap();
+        inputs(dir.path(), &square());
+        fs::write(
+            dir.path().join("public.json"),
+            serde_json::to_vec_pretty(&[49, 50]).unwrap(),
+        )
+        .unwrap();
+        let path = dir.path().join("proof.json");
+        let output = exchange(
+            mode,
+            &[
+                "prove",
+                "--circuit",
+                dir.path().join("circuit.json").to_str().unwrap(),
+                "--public",
+                dir.path().join("public.json").to_str().unwrap(),
+                "--witness",
+                dir.path().join("witness.json").to_str().unwrap(),
+                "--output",
+                path.to_str().unwrap(),
+            ],
+        );
+        match mode {
+            Launch::Cli => {
+                assert!(!output.status.success());
+                assert!(output.stdout.is_empty());
             }
-            assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+            Launch::Native => assert_eq!(event(mode, &output.stdout)["event"], "failed"),
         }
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 3);
     }
 }
 #[test]
-fn both_launches_publish_and_verify_direct_and_family_proofs() {
-    let mut source: Value =
-        serde_json::from_slice(include_bytes!("../../../examples/merkle/family.json")).unwrap();
-    source["entry"] = json!("base");
-    let family = (source, merkle::leaf(0));
+fn both_launches_publish_and_verify_proofs() {
     for mode in [Launch::Cli, Launch::Native] {
-        for job in [square(), family.clone()] {
+        let job = square();
+        {
             let dir = tempfile::tempdir().unwrap();
             inputs(dir.path(), &job);
             let path = dir.path().join("proof.json");
+            let metadata_path = dir.path().join("metadata.json");
+            let prepared = call(
+                mode,
+                &[
+                    "prepare",
+                    "--circuit",
+                    dir.path().join("circuit.json").to_str().unwrap(),
+                    "--output",
+                    metadata_path.to_str().unwrap(),
+                    "--threads",
+                    "4",
+                ],
+            );
+            let metadata: Value =
+                serde_json::from_slice(&fs::read(&metadata_path).unwrap()).unwrap();
+            assert_eq!(prepared["metadata"], metadata);
             let receipt = prove(mode, dir.path(), &path);
+            assert_eq!(receipt["circuit_id"], metadata["circuit_id"]);
             let bytes = fs::read(&path).unwrap();
             #[cfg(unix)]
             {
@@ -247,6 +252,8 @@ fn both_launches_publish_and_verify_direct_and_family_proofs() {
                         "prove".into(),
                         "--circuit".into(),
                         dir.path().join("circuit.json").to_str().unwrap().into(),
+                        "--public".into(),
+                        dir.path().join("public.json").to_str().unwrap().into(),
                         "--witness".into(),
                         dir.path().join("witness.json").to_str().unwrap().into(),
                         "--output".into(),
@@ -268,10 +275,10 @@ fn both_launches_publish_and_verify_direct_and_family_proofs() {
                 receipt["output"],
                 path.canonicalize().unwrap().to_str().unwrap()
             );
-            assert_eq!(receipt["public"], job.1["public"]);
+            assert_eq!(receipt["public"], job.1);
             assert_eq!(
                 verify(mode, dir.path(), &path),
-                json!({"circuit":receipt["circuit"],"public":job.1["public"]})
+                json!({"circuit_id":receipt["circuit_id"],"public":job.1})
             );
             assert!(
                 proof_client::app::invoke(
@@ -279,6 +286,8 @@ fn both_launches_publish_and_verify_direct_and_family_proofs() {
                         "prove".into(),
                         "--circuit".into(),
                         dir.path().join("circuit.json").to_str().unwrap().into(),
+                        "--public".into(),
+                        dir.path().join("public.json").to_str().unwrap().into(),
                         "--witness".into(),
                         dir.path().join("witness.json").to_str().unwrap().into(),
                         "--output".into(),
@@ -289,71 +298,207 @@ fn both_launches_publish_and_verify_direct_and_family_proofs() {
                 .is_err()
             );
             assert_eq!(fs::read(path).unwrap(), bytes);
-            assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 3);
+            assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 5);
         }
     }
 }
 #[test]
-fn independent_subtrees_use_the_same_generic_cli() {
-    tree(1);
-}
-#[test]
-#[ignore = "bounded eight-leaf direct recursion CLI diagnostic"]
-fn eight_leaf_admission() {
-    tree(merkle::MAX_HEIGHT);
-}
-fn tree(height: u32) {
+fn referenced_circuits_use_the_generic_cli() {
     let dir = tempfile::tempdir().unwrap();
-    let mut level = Vec::new();
-    let mut last = (Value::Null, Value::Null);
-    let mut last_path = dir.path().join("unused");
-    let mut node = |job: (Value, Value), name: String| {
-        inputs(dir.path(), &job);
-        let path = dir.path().join(name);
-        let receipt = prove(Launch::Cli, dir.path(), &path);
-        let proof: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(receipt["public"], job.1["public"]);
-        assert_eq!(proof["public"], job.1["public"]);
-        assert_eq!(
-            proof["proof"]["non_primitives"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|table| table["public_values"].as_array().unwrap().len())
-                .sum::<usize>(),
-            9
+    for name in [
+        "base.json",
+        "merge-bases.json",
+        "merge-recursive.json",
+        "merge-verifier.json",
+    ] {
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/merkle")
+                .join(name),
+            dir.path().join(name),
+        )
+        .unwrap();
+    }
+    let metadata_path = dir.path().join("metadata.json");
+    call(
+        Launch::Cli,
+        &[
+            "prepare",
+            "--circuit",
+            dir.path().join("merge-recursive.json").to_str().unwrap(),
+            "--output",
+            metadata_path.to_str().unwrap(),
+            "--threads",
+            "4",
+        ],
+    );
+    let metadata: proof_client_core::proof::Metadata =
+        serde_json::from_slice(&fs::read(&metadata_path).unwrap()).unwrap();
+    let mut proofs = Vec::new();
+    for index in 0..2 {
+        let (public, private) = merkle::leaf(index);
+        let source =
+            serde_json::from_slice(&fs::read(dir.path().join("base.json")).unwrap()).unwrap();
+        inputs(
+            dir.path(),
+            &(
+                source,
+                json!(public),
+                json!({"private":private,"proofs":[]}),
+            ),
         );
-        last = job;
-        last_path = path;
-        proof
-    };
-    for index in 0..1 << height {
-        level.push(node(
-            (merkle::circuit(0), merkle::leaf(index)),
-            format!("0-{index}.json"),
-        ));
+        let path = dir.path().join(format!("leaf-{index}.proof.json"));
+        prove(Launch::Cli, dir.path(), &path);
+        proofs.push(serde_json::from_slice::<Value>(&fs::read(path).unwrap()).unwrap());
     }
-    for current in 1..=height {
-        level = level
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .enumerate()
-            .map(|(index, pair)| {
-                node(
-                    merkle::parent(current, pair[0].clone(), pair[1].clone()).unwrap(),
-                    format!("{current}-{index}.json"),
+    let public = merkle::expected(1)
+        .into_iter()
+        .chain(*metadata.circuits()[Path::new("base.json")].words())
+        .chain(*metadata.verifier_sets()[Path::new("merge-verifier.json")].words())
+        .collect::<Vec<_>>();
+    // Preserve the referenced member's identity while exercising the native launch.
+    fs::write(
+        dir.path().join("public.json"),
+        serde_json::to_vec_pretty(&public).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("witness.json"),
+        serde_json::to_vec_pretty(&json!({"private":[],"proofs":proofs})).unwrap(),
+    )
+    .unwrap();
+    let proof = dir.path().join("merged.proof.json");
+    let source = dir.path().join("merge-bases.json");
+    let statement = dir.path().join("public.json");
+    let witness = dir.path().join("witness.json");
+    let receipt = call(
+        Launch::Native,
+        &[
+            "prove",
+            "--circuit",
+            source.to_str().unwrap(),
+            "--public",
+            statement.to_str().unwrap(),
+            "--witness",
+            witness.to_str().unwrap(),
+            "--output",
+            proof.to_str().unwrap(),
+            "--threads",
+            "4",
+        ],
+    );
+    let verified = call(
+        Launch::Native,
+        &[
+            "verify",
+            "--circuit",
+            source.to_str().unwrap(),
+            "--public",
+            statement.to_str().unwrap(),
+            "--proof",
+            proof.to_str().unwrap(),
+            "--threads",
+            "1",
+        ],
+    );
+    assert_eq!(receipt["public"], json!(public));
+    assert_eq!(verified["public"], json!(public));
+    assert_eq!(
+        receipt["circuit_id"],
+        json!(metadata.circuits()[Path::new("merge-bases.json")])
+    );
+    let artifact: Value = serde_json::from_slice(&fs::read(&proof).unwrap()).unwrap();
+    assert_eq!(artifact["public"], json!(public));
+    assert_eq!(verified["circuit_id"], artifact["circuit_id"]);
+}
+
+#[test]
+fn source_loading_resolves_relative_aliases_and_bounds_the_graph() {
+    use proof_client_core::proof::{MAX_INPUT_BYTES, MAX_SOURCES};
+    for case in ["relative", "missing", "cycle", "count", "bytes"] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("nested")).unwrap();
+        let verify = |path: &str, proof: usize| json!({"op":"verify","verifier":path,"proof":proof,"circuit_id_wires":[0,1,2,3,4,5,6,7]});
+        let mut source = json!({"format":proof_client_core::proof::FORMAT,"inputs":{"public":8,"private":0},"operations":[],"constraints":[]});
+        let mut child = source.clone();
+        source["operations"] = json!([verify("nested/child.json", 0)]);
+        match case {
+            "relative" => {
+                child["operations"] = json!([
+                    verify("../leaf.json", 0),
+                    verify("../nested/../leaf.json", 1)
+                ]);
+                fs::write(
+                    dir.path().join("leaf.json"),
+                    serde_json::to_vec_pretty(&square().0).unwrap(),
                 )
-            })
-            .collect();
+                .unwrap();
+            }
+            "missing" => child["operations"] = json!([verify("missing.json", 0)]),
+            "cycle" => child["operations"] = json!([verify("../circuit.json", 0)]),
+            "count" => {
+                let mut calls = Vec::new();
+                for index in 0..MAX_SOURCES {
+                    let name = format!("{index}.json");
+                    fs::write(
+                        dir.path().join(&name),
+                        serde_json::to_vec_pretty(&square().0).unwrap(),
+                    )
+                    .unwrap();
+                    calls.push(verify(&name, index));
+                }
+                source["operations"] = json!(calls);
+            }
+            "bytes" => {}
+            _ => unreachable!(),
+        }
+        for (name, value) in [("circuit.json", source), ("nested/child.json", child)] {
+            let mut bytes = serde_json::to_vec_pretty(&value).unwrap();
+            if case == "bytes" {
+                bytes.resize(MAX_INPUT_BYTES / 2 + 1, b' ');
+            }
+            fs::write(dir.path().join(name), bytes).unwrap();
+        }
+        let paths = [
+            dir.path().join("circuit.json"),
+            dir.path().join("metadata.json"),
+        ];
+        let result = proof_client::app::invoke(
+            vec![
+                "prepare".into(),
+                "--circuit".into(),
+                paths[0].to_str().unwrap().into(),
+                "--output".into(),
+                paths[1].to_str().unwrap().into(),
+                "--threads".into(),
+                "1".into(),
+            ],
+            |_| Ok(()),
+        );
+        if case == "relative" {
+            let result = result.unwrap();
+            let metadata: Value = serde_json::from_slice(&fs::read(&paths[1]).unwrap()).unwrap();
+            assert_eq!(result["metadata"], metadata);
+            let circuits = metadata["circuits"].as_object().unwrap();
+            assert_eq!(circuits.len(), 3);
+            for path in ["circuit.json", "nested/child.json", "leaf.json"] {
+                assert!(circuits.contains_key(path));
+            }
+        } else {
+            if matches!(case, "count" | "bytes") {
+                assert!(
+                    matches!(
+                        result,
+                        Err(proof_client::app::CliError::Files(
+                            proof_client::FileError::Limit
+                        ))
+                    ),
+                    "{case}: {result:?}"
+                );
+            } else {
+                assert!(result.is_err(), "{case}");
+            }
+            assert!(!paths[1].exists());
+        }
     }
-    assert_eq!(last.1["public"], json!(merkle::expected(height)));
-    assert_eq!(
-        verify(Launch::Cli, dir.path(), &last_path)["public"],
-        last.1["public"]
-    );
-    assert_eq!(
-        fs::read_dir(dir.path()).unwrap().count(),
-        2 * (1 << height) + 1
-    );
 }

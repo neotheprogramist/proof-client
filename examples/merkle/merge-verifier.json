@@ -1,0 +1,13 @@
+{
+  "format": "proof-client/verifier-set/1",
+  "circuits": ["merge-bases.json", "merge-recursive.json"],
+  "verifier_set_id_positions": [17, 18, 19, 20, 21, 22, 23, 24],
+  "layout": {
+    "constants": 12,
+    "public": 12,
+    "alu": 18,
+    "poseidon": 9,
+    "recompose": 15,
+    "challenger": 16
+  }
+}

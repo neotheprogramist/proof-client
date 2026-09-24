@@ -56,10 +56,48 @@ impl Output {
     }
     pub(crate) fn publish(self, value: &impl serde::Serialize) -> Result<(), FileError> {
         let mut file = tempfile::NamedTempFile::new_in(self.parent)?;
-        serde_json::to_writer(&mut file, value)?;
+        serde_json::to_writer_pretty(&mut file, value)?;
         file.write_all(b"\n")?;
         file.as_file().sync_all()?;
         file.persist_noclobber(self.path)?;
         Ok(())
+    }
+}
+
+pub(crate) fn circuit(
+    path: &Path,
+) -> Result<proof_client_core::proof::Circuit, crate::app::CliError> {
+    use proof_client_core::proof::{Circuit, MAX_INPUT_BYTES, MAX_SOURCES, Source};
+    use std::collections::BTreeMap;
+    let absolute = path.canonicalize()?;
+    let root = absolute.parent().ok_or(FileError::Output)?.to_owned();
+    let entry = absolute.file_name().ok_or(FileError::Output)?.into();
+    let mut pending = vec![absolute];
+    let mut sources = BTreeMap::new();
+    let mut size = 0;
+    let mut index = 0;
+    while let Some(path) = pending.get(index).cloned() {
+        let bytes = read(&path, MAX_INPUT_BYTES - size)?;
+        size += bytes.len();
+        let parent = path.parent().ok_or(FileError::Output)?;
+        let source = Source::parse(&bytes)?.resolve(|reference| {
+            let dependency = parent.join(reference).canonicalize()?;
+            if !pending.contains(&dependency) {
+                if pending.len() == MAX_SOURCES {
+                    return Err(FileError::Limit);
+                }
+                pending.push(dependency.clone());
+            }
+            Ok::<_, FileError>(source_name(&root, &dependency))
+        })?;
+        sources.insert(source_name(&root, &path), source);
+        index += 1;
+    }
+    Ok(Circuit::link(entry, sources)?)
+}
+fn source_name(root: &Path, path: &Path) -> std::path::PathBuf {
+    match path.strip_prefix(root) {
+        Ok(relative) => relative.to_owned(),
+        Err(_) => path.to_owned(),
     }
 }

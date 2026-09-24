@@ -1,7 +1,108 @@
+diff --git a/crates/common/src/context/test/helpers.rs b/crates/common/src/context/test/helpers.rs
+index 9a6f1bb..3b20ee5 100644
+--- a/crates/common/src/context/test/helpers.rs
++++ b/crates/common/src/context/test/helpers.rs
+@@ -24,8 +24,8 @@ pub fn test_mt_context(io_buffer: usize) -> (Executor, Executor) {
+     let (mux_0, mux_1) = test_framed_mux(io_buffer);
+ 
+     (
+-        ExecutorBuilder::default().build(mux_0),
+-        ExecutorBuilder::default().build(mux_1),
++        ExecutorBuilder::default().build(mux_0).unwrap(),
++        ExecutorBuilder::default().build(mux_1).unwrap(),
+     )
+ }
+ 
+@@ -42,7 +42,13 @@ where
+     let (mux_0, mux_1) = test_framed_mux(io_buffer);
+ 
+     (
+-        ExecutorBuilder::default().spawn(spawn.clone()).build(mux_0),
+-        ExecutorBuilder::default().spawn(spawn).build(mux_1),
++        ExecutorBuilder::default()
++            .spawn(spawn.clone())
++            .build(mux_0)
++            .unwrap(),
++        ExecutorBuilder::default()
++            .spawn(spawn)
++            .build(mux_1)
++            .unwrap(),
+     )
+ }
+diff --git a/crates/common/src/context/test/recording.rs b/crates/common/src/context/test/recording.rs
+index 7d30c6f..a982646 100644
+--- a/crates/common/src/context/test/recording.rs
++++ b/crates/common/src/context/test/recording.rs
+@@ -409,8 +409,8 @@ pub fn recording_mt_context(io_buffer: usize) -> (Executor, Executor, Arc<Mutex<
+     let (mux_0, mux_1, recorded) = recording_test_mux(io_buffer, None);
+ 
+     (
+-        ExecutorBuilder::default().build(mux_0),
+-        ExecutorBuilder::default().build(mux_1),
++        ExecutorBuilder::default().build(mux_0).unwrap(),
++        ExecutorBuilder::default().build(mux_1).unwrap(),
+         recorded,
+     )
+ }
+@@ -429,8 +429,8 @@ pub fn recording_mt_context_with_limit(
+     let (mux_0, mux_1, recorded) = recording_test_mux(io_buffer, Some(max_frame_length));
+ 
+     (
+-        ExecutorBuilder::default().build(mux_0),
+-        ExecutorBuilder::default().build(mux_1),
++        ExecutorBuilder::default().build(mux_0).unwrap(),
++        ExecutorBuilder::default().build(mux_1).unwrap(),
+         recorded,
+     )
+ }
+@@ -456,10 +456,12 @@ where
+     let exec_0 = ExecutorBuilder::default()
+         .num_threads(concurrency)
+         .spawn(spawn.clone())
+-        .build(mux_0);
++        .build(mux_0)
++        .unwrap();
+     let exec_1 = ExecutorBuilder::default()
+         .num_threads(concurrency)
+         .spawn(spawn)
+-        .build(mux_1);
++        .build(mux_1)
++        .unwrap();
+     (exec_0, exec_1, recorded)
+ }
+diff --git a/crates/common/src/context/test/replay.rs b/crates/common/src/context/test/replay.rs
+index 8988038..674869b 100644
+--- a/crates/common/src/context/test/replay.rs
++++ b/crates/common/src/context/test/replay.rs
+@@ -167,7 +167,7 @@ impl Mux for ReplayTestMux {
+ /// * `recorded` - The recorded data to replay (per-channel).
+ pub fn replay_mt_context(recorded: RecordedMtData) -> Executor {
+     let mux = ReplayTestMux::new(recorded, None);
+-    ExecutorBuilder::default().build(mux)
++    ExecutorBuilder::default().build(mux).unwrap()
+ }
+ 
+ /// Creates a multi-threaded context that replays recorded data with a custom
+@@ -179,7 +179,7 @@ pub fn replay_mt_context(recorded: RecordedMtData) -> Executor {
+ /// * `max_frame_length` - Maximum frame size in bytes.
+ pub fn replay_mt_context_with_limit(recorded: RecordedMtData, max_frame_length: usize) -> Executor {
+     let mux = ReplayTestMux::new(recorded, Some(max_frame_length));
+-    ExecutorBuilder::default().build(mux)
++    ExecutorBuilder::default().build(mux).unwrap()
+ }
+ 
+ /// Like [`replay_mt_context_with_limit`], but uses a custom worker spawn
+@@ -198,4 +198,5 @@ where
+         .num_threads(concurrency)
+         .spawn(spawn)
+         .build(mux)
++        .unwrap()
+ }
 diff --git a/crates/common/src/context.rs b/crates/common/src/context.rs
+index a666a59..48b31b2 100644
 --- a/crates/common/src/context.rs
 +++ b/crates/common/src/context.rs
-@@ -8,6 +8,7 @@
+@@ -8,6 +8,7 @@ use std::sync::Arc;
  use futures::{
      AsyncRead, AsyncWrite,
      future::{self, BoxFuture, Either},
@@ -9,17 +110,17 @@ diff --git a/crates/common/src/context.rs b/crates/common/src/context.rs
  };
  
  #[cfg(any(test, feature = "test-utils"))]
-@@ -20,6 +21,9 @@
- };
+@@ -21,6 +22,9 @@ pub use test::{
  
  use crate::{ContextId, executor::Inner, io::Io, mux::Mux};
-+
+ 
 +// Policy: upstream PR #403 bounds map concurrency; both peers use the same limit.
 +const MAP_CONCURRENCY: usize = 32;
- 
++
  /// A task execution context.
  ///
-@@ -180,27 +184,39 @@
+ /// Each context owns an I/O channel and a [`ContextId`]. Use [`join`],
+@@ -180,27 +184,39 @@ impl Context {
          T: Send + 'static,
          R: Send + 'static,
      {
@@ -78,7 +179,7 @@ diff --git a/crates/common/src/context.rs b/crates/common/src/context.rs
      }
  
      /// Runs `a` and `b` concurrently and returns both results.
-@@ -224,7 +240,7 @@
+@@ -224,7 +240,7 @@ impl Context {
  
          let task_a = run(executor.as_ref(), async move { a(&mut ctx_a).await });
          let task_b = run(executor.as_ref(), async move { b(&mut ctx_b).await });
@@ -87,7 +188,7 @@ diff --git a/crates/common/src/context.rs b/crates/common/src/context.rs
      }
  
      /// Like [`Context::join`], but short-circuits as soon as either branch
-@@ -255,9 +271,9 @@
+@@ -255,9 +271,9 @@ impl Context {
          let mut ctx_a = self.child(parent_id.child(0))?;
          let mut ctx_b = self.child(parent_id.child(1))?;
  
@@ -100,7 +201,7 @@ diff --git a/crates/common/src/context.rs b/crates/common/src/context.rs
      }
  
      /// Same as [`Context::try_join`], but with three branches.
-@@ -292,10 +308,10 @@
+@@ -292,10 +308,10 @@ impl Context {
          let mut ctx_b = self.child(parent_id.child(1))?;
          let mut ctx_c = self.child(parent_id.child(2))?;
  
@@ -115,7 +216,7 @@ diff --git a/crates/common/src/context.rs b/crates/common/src/context.rs
      }
  
      /// Same as [`Context::try_join`], but with four branches.
-@@ -335,11 +351,11 @@
+@@ -335,11 +351,11 @@ impl Context {
          let mut ctx_c = self.child(parent_id.child(2))?;
          let mut ctx_d = self.child(parent_id.child(3))?;
  
@@ -132,7 +233,7 @@ diff --git a/crates/common/src/context.rs b/crates/common/src/context.rs
      }
  
      fn executor(&self) -> Option<&Arc<Inner>> {
-@@ -351,32 +367,59 @@
+@@ -351,32 +367,59 @@ impl Context {
      }
  }
  
@@ -202,15 +303,43 @@ diff --git a/crates/common/src/context.rs b/crates/common/src/context.rs
  impl ContextError {
      fn mux(source: std::io::Error) -> Self {
 -        Self { source }
--    }
--}
 +        Self::Mux(source)
-+    }
-+}
+     }
+ }
 diff --git a/crates/common/src/executor.rs b/crates/common/src/executor.rs
+index 890a52f..3b77ca4 100644
 --- a/crates/common/src/executor.rs
 +++ b/crates/common/src/executor.rs
-@@ -260,27 +260,10 @@
+@@ -136,7 +136,7 @@ impl ExecutorBuilder {
+     }
+ 
+     /// Builds the executor with the given multiplexer.
+-    pub fn build<M: Mux + Send + Sync + 'static>(self, mux: M) -> Executor {
++    pub fn build<M: Mux + Send + Sync + 'static>(self, mux: M) -> Result<Executor, std::io::Error> {
+         let injector = Injector::new();
+ 
+         // Create local worker queues and their stealers.
+@@ -164,14 +164,14 @@ impl ExecutorBuilder {
+             next_context: AtomicU32::new(0),
+         });
+ 
+-        // Spawn worker threads via the configured spawn callback.
++        let executor = Executor { inner };
++        // Ownership precedes spawning so partial startup shuts down on error.
+         for (index, (local, parker)) in worker_queues.into_iter().zip(parkers).enumerate() {
+-            let inner = inner.clone();
+-            (self.spawn)(Box::new(move || worker_loop(inner, local, index, parker)))
+-                .expect("failed to spawn worker thread");
++            let inner = executor.inner.clone();
++            (self.spawn)(Box::new(move || worker_loop(inner, local, index, parker)))?;
+         }
+ 
+-        Executor { inner }
++        Ok(executor)
+     }
+ }
+ 
+@@ -260,27 +260,10 @@ impl Executor {
          ExecutorBuilder::default()
      }
  
@@ -240,7 +369,7 @@ diff --git a/crates/common/src/executor.rs b/crates/common/src/executor.rs
  
          for w in self.inner.workers.iter() {
              w.unparker.unpark();
-@@ -309,6 +292,17 @@
+@@ -309,6 +292,17 @@ impl Executor {
      }
  }
  
@@ -258,7 +387,7 @@ diff --git a/crates/common/src/executor.rs b/crates/common/src/executor.rs
  impl Drop for Executor {
      fn drop(&mut self) {
          self.shutdown();
-@@ -323,16 +317,12 @@
+@@ -323,16 +317,12 @@ where
  {
      let inner = Arc::clone(inner);
      let schedule = move |runnable: Runnable| {
@@ -278,3 +407,52 @@ diff --git a/crates/common/src/executor.rs b/crates/common/src/executor.rs
          // Scan for an idle worker and claim it for this notification. The
          // `load` is a cheap filter; the `compare_exchange` is what makes the
          // claim race-free against other concurrent producers. Stops at the
+@@ -362,7 +352,7 @@ mod tests {
+     #[test]
+     fn test_executor_spawn() {
+         let (mux_a, _mux_b) = test_framed_mux(1024);
+-        let executor = Executor::builder().num_threads(2).build(mux_a);
++        let executor = Executor::builder().num_threads(2).build(mux_a).unwrap();
+ 
+         let mut ctx = executor.new_context().unwrap();
+         let (a, b) = futures::executor::block_on(ctx.join(
+@@ -379,7 +369,7 @@ mod tests {
+     #[test]
+     fn test_executor_map() {
+         let (mux_a, _mux_b) = test_framed_mux(1024);
+-        let executor = Executor::builder().num_threads(2).build(mux_a);
++        let executor = Executor::builder().num_threads(2).build(mux_a).unwrap();
+ 
+         let mut ctx = executor.new_context().unwrap();
+ 
+@@ -395,7 +385,7 @@ mod tests {
+     #[test]
+     fn test_executor_join() {
+         let (mux_a, _mux_b) = test_framed_mux(1024);
+-        let executor = Executor::builder().num_threads(2).build(mux_a);
++        let executor = Executor::builder().num_threads(2).build(mux_a).unwrap();
+ 
+         let mut ctx = executor.new_context().unwrap();
+ 
+@@ -414,8 +404,8 @@ mod tests {
+         // Test that I/O works between two executors (simulating two parties).
+         let (mux_a, mux_b) = test_framed_mux(1024);
+ 
+-        let executor_a = Executor::builder().num_threads(2).build(mux_a);
+-        let executor_b = Executor::builder().num_threads(2).build(mux_b);
++        let executor_a = Executor::builder().num_threads(2).build(mux_a).unwrap();
++        let executor_b = Executor::builder().num_threads(2).build(mux_b).unwrap();
+ 
+         let mut ctx_a = executor_a.new_context().unwrap();
+         let mut ctx_b = executor_b.new_context().unwrap();
+@@ -444,8 +434,8 @@ mod tests {
+         // Test that map works with I/O between two parties.
+         let (mux_a, mux_b) = test_framed_mux(1024);
+ 
+-        let executor_a = Executor::builder().num_threads(4).build(mux_a);
+-        let executor_b = Executor::builder().num_threads(4).build(mux_b);
++        let executor_a = Executor::builder().num_threads(4).build(mux_a).unwrap();
++        let executor_b = Executor::builder().num_threads(4).build(mux_b).unwrap();
+ 
+         let mut ctx_a = executor_a.new_context().unwrap();
+         let mut ctx_b = executor_b.new_context().unwrap();

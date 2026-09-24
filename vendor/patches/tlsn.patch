@@ -1,0 +1,264 @@
+diff --git a/crates/examples/attestation/prove.rs b/crates/examples/attestation/prove.rs
+index 6e25508..2451ba5 100644
+--- a/crates/examples/attestation/prove.rs
++++ b/crates/examples/attestation/prove.rs
+@@ -79,7 +79,7 @@ async fn prover<S: AsyncWrite + AsyncRead + Send + Sync + Unpin + 'static>(
+         .unwrap_or(DEFAULT_FIXTURE_PORT);
+ 
+     // Create a session with the notary.
+-    let session = Session::new(socket.compat());
++    let session = Session::new(socket.compat())?;
+     let (driver, mut handle) = session.split();
+ 
+     // Spawn the session driver to run in the background.
+@@ -282,7 +282,7 @@ async fn notary<S: AsyncWrite + AsyncRead + Send + Sync + Unpin + 'static>(
+     socket: S,
+ ) -> Result<()> {
+     // Create a session with the prover.
+-    let session = Session::new(socket.compat());
++    let session = Session::new(socket.compat())?;
+     let (driver, mut handle) = session.split();
+ 
+     // Spawn the session driver to run in the background.
+diff --git a/crates/examples/basic/basic.rs b/crates/examples/basic/basic.rs
+index 3ad6a6b..5717739 100644
+--- a/crates/examples/basic/basic.rs
++++ b/crates/examples/basic/basic.rs
+@@ -76,7 +76,7 @@ async fn prover<T: AsyncWrite + AsyncRead + Send + Unpin + 'static>(
+     let server_domain = uri.authority().unwrap().host();
+ 
+     // Create a session with the verifier.
+-    let session = Session::new(verifier_socket.compat());
++    let session = Session::new(verifier_socket.compat())?;
+     let (driver, mut handle) = session.split();
+ 
+     // Spawn the session driver to run in the background.
+@@ -185,7 +185,7 @@ async fn verifier<T: AsyncWrite + AsyncRead + Send + Sync + Unpin + 'static>(
+     socket: T,
+ ) -> Result<PartialTranscript> {
+     // Create a session with the prover.
+-    let session = Session::new(socket.compat());
++    let session = Session::new(socket.compat())?;
+     let (driver, mut handle) = session.split();
+ 
+     // Spawn the session driver to run in the background.
+diff --git a/crates/examples/proxy/proxy.rs b/crates/examples/proxy/proxy.rs
+index 79213aa..55f5c5e 100644
+--- a/crates/examples/proxy/proxy.rs
++++ b/crates/examples/proxy/proxy.rs
+@@ -71,7 +71,7 @@ async fn prover<T: AsyncWrite + AsyncRead + Send + Unpin + 'static>(
+     let server_domain = uri.authority().unwrap().host();
+ 
+     // Create a session with the verifier.
+-    let session = Session::new(verifier_socket.compat());
++    let session = Session::new(verifier_socket.compat())?;
+     let (driver, mut handle) = session.split();
+ 
+     // Spawn the session driver to run in the background.
+@@ -176,7 +176,7 @@ async fn verifier<T: AsyncWrite + AsyncRead + Send + Unpin + 'static>(
+     server_addr: SocketAddr,
+ ) -> Result<PartialTranscript> {
+     // Create a session with the prover.
+-    let session = Session::new(prover_socket.compat());
++    let session = Session::new(prover_socket.compat())?;
+     let (driver, mut handle) = session.split();
+ 
+     // Spawn the session driver to run in the background.
+diff --git a/crates/examples-zk/prover.rs b/crates/examples-zk/prover.rs
+index 5e20884..f87d647 100644
+--- a/crates/examples-zk/prover.rs
++++ b/crates/examples-zk/prover.rs
+@@ -67,7 +67,7 @@ pub async fn prover<T: AsyncWrite + AsyncRead + Send + Unpin + 'static>(
+         .host();
+ 
+     // Create a session with the verifier.
+-    let session = Session::new(verifier_socket.compat());
++    let session = Session::new(verifier_socket.compat())?;
+     let (driver, mut handle) = session.split();
+ 
+     // Spawn the session driver to run in the background.
+diff --git a/crates/examples-zk/verifier.rs b/crates/examples-zk/verifier.rs
+index 8d08ea1..75d7e31 100644
+--- a/crates/examples-zk/verifier.rs
++++ b/crates/examples-zk/verifier.rs
+@@ -28,7 +28,7 @@ pub async fn verifier<T: AsyncWrite + AsyncRead + Send + Sync + Unpin + 'static>
+     socket: T,
+ ) -> Result<PartialTranscript> {
+     // Create a session with the prover.
+-    let session = Session::new(socket.compat());
++    let session = Session::new(socket.compat())?;
+     let (driver, mut handle) = session.split();
+ 
+     // Spawn the session driver to run in the background.
+diff --git a/crates/harness/.gitignore b/crates/harness/.gitignore
+--- a/crates/harness/.gitignore
++++ b/crates/harness/.gitignore
+@@ -4 +4,2 @@
+ /bin/
++!/static/index.html
+diff --git a/crates/harness/executor/src/bench/prover.rs b/crates/harness/executor/src/bench/prover.rs
+index a4bcdad..8d825b2 100644
+--- a/crates/harness/executor/src/bench/prover.rs
++++ b/crates/harness/executor/src/bench/prover.rs
+@@ -29,7 +29,7 @@ pub async fn bench_prover(provider: &IoProvider, config: &Bench) -> Result<Prove
+     let sent = verifier_io.sent();
+     let recv = verifier_io.recv();
+ 
+-    let mut session = Session::new(verifier_io);
++    let mut session = Session::new(verifier_io)?;
+ 
+     let prover = session.new_prover(ProverConfig::builder().build()?)?;
+     let (session, handle) = session.split();
+diff --git a/crates/harness/executor/src/bench/verifier.rs b/crates/harness/executor/src/bench/verifier.rs
+index 74804f2..e100839 100644
+--- a/crates/harness/executor/src/bench/verifier.rs
++++ b/crates/harness/executor/src/bench/verifier.rs
+@@ -13,7 +13,7 @@ use crate::{IoProvider, spawn};
+ 
+ pub async fn bench_verifier(provider: &IoProvider, _config: &Bench) -> Result<()> {
+     let io = provider.provide_proto_io().await?;
+-    let mut session = Session::new(io);
++    let mut session = Session::new(io)?;
+ 
+     let verifier = session.new_verifier(
+         VerifierConfig::builder()
+diff --git a/crates/harness/executor/test_plugins/basic.rs b/crates/harness/executor/test_plugins/basic.rs
+index bc88450..ab216dc 100644
+--- a/crates/harness/executor/test_plugins/basic.rs
++++ b/crates/harness/executor/test_plugins/basic.rs
+@@ -34,7 +34,7 @@ crate::test!("proxy", prover_proxy, verifier);
+ 
+ async fn prover_mpc(provider: &IoProvider) {
+     let io = provider.provide_proto_io().await.unwrap();
+-    let mut session = Session::new(io);
++    let mut session = Session::new(io).unwrap();
+     let prover = session
+         .new_prover(ProverConfig::builder().build().unwrap())
+         .unwrap();
+@@ -65,7 +65,7 @@ async fn prover_mpc(provider: &IoProvider) {
+ 
+ async fn prover_proxy(provider: &IoProvider) {
+     let io = provider.provide_proto_io().await.unwrap();
+-    let mut session = Session::new(io);
++    let mut session = Session::new(io).unwrap();
+     let prover = session
+         .new_prover(ProverConfig::builder().build().unwrap())
+         .unwrap();
+@@ -167,7 +167,7 @@ async fn finish_prover(
+ 
+ async fn verifier(provider: &IoProvider) {
+     let io = provider.provide_proto_io().await.unwrap();
+-    let mut session = Session::new(io);
++    let mut session = Session::new(io).unwrap();
+ 
+     let config = VerifierConfig::builder()
+         .root_store(RootCertStore {
+diff --git a/crates/sdk-core/src/prover.rs b/crates/sdk-core/src/prover.rs
+index 4a0aff5..f028eea 100644
+--- a/crates/sdk-core/src/prover.rs
++++ b/crates/sdk-core/src/prover.rs
+@@ -111,7 +111,7 @@ impl SdkProver {
+ 
+         info!("connecting to verifier");
+ 
+-        let session = Session::new(verifier_io);
++        let session = Session::new(verifier_io)?;
+         let (driver, mut handle) = session.split();
+ 
+         crate::spawn::spawn(async move {
+diff --git a/crates/sdk-core/src/verifier.rs b/crates/sdk-core/src/verifier.rs
+index 57beec0..3134c74 100644
+--- a/crates/sdk-core/src/verifier.rs
++++ b/crates/sdk-core/src/verifier.rs
+@@ -92,7 +92,7 @@ impl SdkVerifier {
+ 
+         info!("connecting to prover");
+ 
+-        let session = Session::new(prover_io);
++        let session = Session::new(prover_io)?;
+         let (driver, mut handle) = session.split();
+ 
+         crate::spawn::spawn(async move {
+diff --git a/crates/tlsn/src/session.rs b/crates/tlsn/src/session.rs
+index 241ca8c..cc48783 100644
+--- a/crates/tlsn/src/session.rs
++++ b/crates/tlsn/src/session.rs
+@@ -46,7 +46,7 @@ where
+     Io: AsyncRead + AsyncWrite + Unpin,
+ {
+     /// Creates a new session.
+-    pub fn new(io: Io) -> Self {
++    pub fn new(io: Io) -> Result<Self> {
+         let mut mux_config = tlsn_mux::Config::default();
+ 
+         mux_config.set_keep_alive(true);
+@@ -54,15 +54,22 @@ where
+ 
+         let conn = tlsn_mux::Connection::new(io, mux_config);
+         let handle = conn.handle().expect("handle should be available");
+-        let executor = build_executor(MuxHandle {
++        let executor = match build_executor(MuxHandle {
+             handle: handle.clone(),
+-        });
++        }) {
++            Ok(executor) => executor,
++            Err(source) => {
++                return Err(Error::io()
++                    .with_msg("failed to start session workers")
++                    .with_source(source));
++            }
++        };
+ 
+-        Self {
++        Ok(Self {
+             conn: Some(conn),
+             executor,
+             handle,
+-        }
++        })
+     }
+ 
+     /// Creates a new prover.
+@@ -310,14 +317,14 @@ impl Mux for MuxHandle {
+ }
+ 
+ /// Builds a work-stealing executor with the given muxer.
+-fn build_executor(mux: MuxHandle) -> Executor {
++fn build_executor(mux: MuxHandle) -> std::io::Result<Executor> {
+     #[cfg(all(feature = "web", target_arch = "wasm32"))]
+     let cores = web_spawn::available_parallelism().map(|n| n.get());
+ 
+     #[cfg(not(all(feature = "web", target_arch = "wasm32")))]
+     let cores = std::thread::available_parallelism().map(|n| n.get());
+ 
+-    let builder = Executor::builder().num_threads(cores.unwrap_or(8));
++    let builder = Executor::builder().num_threads(cores?);
+ 
+     #[cfg(all(feature = "web", target_arch = "wasm32"))]
+     let builder = builder.spawn(|f| {
+diff --git a/crates/tlsn/tests/test.rs b/crates/tlsn/tests/test.rs
+index 26dc45b..21f690c 100644
+--- a/crates/tlsn/tests/test.rs
++++ b/crates/tlsn/tests/test.rs
+@@ -43,8 +43,8 @@ async fn test_mpc() {
+         .unwrap();
+ 
+     let (prover_socket, verifier_socket) = tokio::io::duplex(2 << 23);
+-    let mut session_p = Session::new(prover_socket.compat());
+-    let mut session_v = Session::new(verifier_socket.compat());
++    let mut session_p = Session::new(prover_socket.compat()).unwrap();
++    let mut session_v = Session::new(verifier_socket.compat()).unwrap();
+ 
+     let prover = session_p
+         .new_prover(ProverConfig::builder().build().unwrap())
+@@ -110,8 +110,8 @@ async fn test_proxy() {
+         .unwrap();
+ 
+     let (prover_socket, verifier_socket) = tokio::io::duplex(2 << 23);
+-    let mut session_p = Session::new(prover_socket.compat());
+-    let mut session_v = Session::new(verifier_socket.compat());
++    let mut session_p = Session::new(prover_socket.compat()).unwrap();
++    let mut session_v = Session::new(verifier_socket.compat()).unwrap();
+ 
+     let prover = session_p
+         .new_prover(ProverConfig::builder().build().unwrap())

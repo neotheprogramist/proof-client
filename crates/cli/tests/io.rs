@@ -46,9 +46,9 @@ fn admission_rejects_ambiguity_without_reflecting_private_arguments() {
     for input in [
         "{",
         "[]",
-        r#"{"protocol":"proof-client/5","args":[],"args":[]}"#,
+        r#"{"protocol":"proof-client/7","args":[],"args":[]}"#,
         r#"{"protocol":"other","args":[]}"#,
-        r#"{"protocol":"proof-client/5","args":[],"secret":"SYNTHETIC_SECRET"}"#,
+        r#"{"protocol":"proof-client/7","args":[],"secret":"SYNTHETIC_SECRET"}"#,
     ] {
         let result = response(input.as_bytes());
         assert_eq!(result["event"], "failed");
@@ -155,8 +155,13 @@ fn every_native_file_argument_requires_an_absolute_path() {
     let dir = tempfile::tempdir().unwrap();
     let absolute = dir.path().join("missing").to_str().unwrap().to_owned();
     for (command, files, rest) in [
-        ("prove", vec!["circuit", "witness", "output"], vec![]),
-        ("verify", vec!["circuit", "proof"], vec![]),
+        ("prepare", vec!["circuit", "output"], vec![]),
+        (
+            "prove",
+            vec!["circuit", "public", "witness", "output"],
+            vec![],
+        ),
+        ("verify", vec!["circuit", "public", "proof"], vec![]),
         (
             "serve",
             vec!["cert", "key", "target-ca", "output"],

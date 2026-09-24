@@ -253,7 +253,9 @@ async fn executor_worker() {
                         let _owned = owned;
                         if cancel {
                             barrier.wait().await;
-                            if failed != Some(index) { futures::future::pending::<()>().await; }
+                            if failed != Some(index) {
+                                futures::future::pending::<()>().await;
+                            }
                         }
                         if failed == Some(index) {
                             Err(index)

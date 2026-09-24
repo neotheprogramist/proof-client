@@ -1,0 +1,65 @@
+{
+  "format": "proof-client/circuit/4",
+  "inputs": {
+    "public": 9,
+    "private": 8
+  },
+  "operations": [
+    {
+      "op": "poseidon2",
+      "tag": 1347223809,
+      "inputs": [9, 10, 11, 12, 13, 14, 15, 16]
+    },
+    {
+      "op": "constant",
+      "value": 0
+    }
+  ],
+  "constraints": [
+    {
+      "op": "equal",
+      "left": 0,
+      "right": 25
+    },
+    {
+      "op": "equal",
+      "left": 1,
+      "right": 17
+    },
+    {
+      "op": "equal",
+      "left": 2,
+      "right": 18
+    },
+    {
+      "op": "equal",
+      "left": 3,
+      "right": 19
+    },
+    {
+      "op": "equal",
+      "left": 4,
+      "right": 20
+    },
+    {
+      "op": "equal",
+      "left": 5,
+      "right": 21
+    },
+    {
+      "op": "equal",
+      "left": 6,
+      "right": 22
+    },
+    {
+      "op": "equal",
+      "left": 7,
+      "right": 23
+    },
+    {
+      "op": "equal",
+      "left": 8,
+      "right": 24
+    }
+  ]
+}

@@ -1,8 +1,13 @@
-use crate::proof::{
-    config::{Config, FRI},
+use super::{
+    Error,
+    config::Config,
     engine::{self, Backend, E, F, Inputs},
-    error::Error,
+    identity::{CircuitId, key},
     shape,
+    source::{
+        Constraint, Definition, InputsCount, MAX_INPUT_BYTES, MAX_RECURSIVE_CALLS, MAX_WIRES,
+        Operation, Verification,
+    },
 };
 use p3_circuit::{
     Circuit as Compiled, CircuitBuilder, ExprId, NonPrimitiveOpId, StatementExport, StatementSchema,
@@ -11,107 +16,14 @@ use p3_circuit_prover::{BatchStarkProof, CircuitVerifier, PreparedCircuitProver}
 use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_recursion::{BatchOnly, TrustedPcsRecursionBackend};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::num::NonZeroUsize;
 
-pub const FORMAT: &str = "proof-client/circuit/1";
-// Policy: bound circuit compilation.
-const MAX_WIRES: usize = 4096;
-const MAX_DEPTH: usize = 3;
-const MAX_CIRCUITS: usize = 15;
-// Policy: binary recursion fanout.
-const MAX_RECURSIVE_CALLS: usize = 2;
-pub const MAX_INPUT_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_PROOF_BYTES: usize = 64 * 1024 * 1024;
-pub const MAX_JOB_BYTES: usize = 256 * 1024 * 1024;
+pub const MAX_WITNESS_BYTES: usize = 256 * 1024 * 1024;
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Definition {
-    format: String,
-    inputs: InputsCount,
-    #[serde(default)]
-    children: Vec<Definition>,
-    operations: Vec<Operation>,
-    constraints: Vec<Equality>,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct InputsCount {
-    public: usize,
-    private: usize,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
-enum Operation {
-    Constant { value: u32 },
-    Add { left: usize, right: usize },
-    Sub { left: usize, right: usize },
-    Mul { left: usize, right: usize },
-    Poseidon2 { tag: u32, inputs: Vec<usize> },
-    Verify { child: usize },
-}
-#[derive(Deserialize, Serialize)]
-#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
-enum Equality {
-    Equal { left: usize, right: usize },
-    Bits { wire: usize, bits: u8 },
-}
-
-pub struct Circuit {
-    definition: Definition,
-}
-impl Circuit {
-    fn from_definition(definition: Definition) -> Result<Self, Error> {
-        let mut remaining = MAX_CIRCUITS;
-        validate(&definition, 0, &mut remaining)?;
-        Ok(Self { definition })
-    }
-    fn public_count(&self) -> usize {
-        self.definition.inputs.public
-    }
-}
-fn identity(definition: &impl Serialize) -> Result<String, Error> {
-    let encoded = serde_json::to_vec(&(
-        FORMAT,
-        (
-            FRI.suite().as_u16(),
-            FRI.log_blowup(),
-            FRI.log_final_poly_len(),
-            FRI.max_log_arity(),
-            FRI.num_queries(),
-            FRI.commit_pow_bits(),
-            FRI.query_pow_bits(),
-            FRI.input_cap_height(),
-            FRI.commit_cap_height(),
-            FRI.num_random_codewords(),
-            FRI.salt_elements(),
-        ),
-        definition,
-    ))?;
-    Ok(Sha256::digest(encoded)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
-}
-fn validate(definition: &Definition, depth: usize, remaining: &mut usize) -> Result<(), Error> {
-    if definition.format != FORMAT || depth > MAX_DEPTH || *remaining == 0 {
-        return Err(Error::Shape);
-    }
-    *remaining -= 1;
-    for child in &definition.children {
-        validate(child, depth + 1, remaining)?;
-    }
-    validate_body(
-        definition,
-        &definition
-            .children
-            .iter()
-            .map(|child| child.inputs.public)
-            .collect::<Vec<_>>(),
-    )
-}
-fn validate_body(definition: &Definition, children: &[usize]) -> Result<(), Error> {
+pub(super) fn validate_body(
+    definition: &Definition,
+    child_count: impl Fn(&Verification) -> Result<usize, Error>,
+) -> Result<(), Error> {
     let mut wires = definition
         .inputs
         .public
@@ -121,12 +33,12 @@ fn validate_body(definition: &Definition, children: &[usize]) -> Result<(), Erro
         || definition.inputs.public == 0
         || definition.operations.len() > MAX_WIRES
         || definition.constraints.len() > MAX_WIRES
-        || definition.children.len() > MAX_RECURSIVE_CALLS
+        || definition.verifications().count() > MAX_RECURSIVE_CALLS
     {
         return Err(Error::Shape);
     }
     let mut hash_words = 0usize;
-    let mut recursive_calls = 0usize;
+    let mut proof_slots = vec![false; definition.verifications().count()];
     for operation in &definition.operations {
         let added = match operation {
             Operation::Constant { value } if *value < F::ORDER_U32 => 1,
@@ -150,12 +62,13 @@ fn validate_body(definition: &Definition, children: &[usize]) -> Result<(), Erro
                     .ok_or(Error::Shape)?;
                 8
             }
-            Operation::Verify { child } => {
-                recursive_calls += 1;
-                if recursive_calls > MAX_RECURSIVE_CALLS {
+            Operation::Verify(call) => {
+                let slot = proof_slots.get_mut(call.proof).ok_or(Error::Shape)?;
+                if *slot || call.circuit_id_wires.iter().any(|index| *index >= wires) {
                     return Err(Error::Shape);
                 }
-                *children.get(*child).ok_or(Error::Shape)?
+                *slot = true;
+                child_count(call)?
             }
             _ => return Err(Error::Shape),
         };
@@ -166,8 +79,8 @@ fn validate_body(definition: &Definition, children: &[usize]) -> Result<(), Erro
     }
     for constraint in &definition.constraints {
         match constraint {
-            Equality::Equal { left, right } if *left < wires && *right < wires => {}
-            Equality::Bits { wire, bits } if *wire < wires && (1..=30).contains(bits) => {}
+            Constraint::Equal { left, right } if *left < wires && *right < wires => {}
+            Constraint::Bits { wire, bits } if *wire < wires && (1..=30).contains(bits) => {}
             _ => return Err(Error::Shape),
         }
     }
@@ -176,56 +89,60 @@ fn validate_body(definition: &Definition, children: &[usize]) -> Result<(), Erro
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Assignment {
-    public: Vec<u32>,
+struct Witness {
     private: Vec<u32>,
     proofs: Vec<Artifact>,
 }
-impl Assignment {
-    fn parse(bytes: &[u8], definition: &Definition) -> Result<Self, Error> {
-        if bytes.len() > MAX_JOB_BYTES {
+pub struct PublicInput(pub(super) Vec<u32>);
+impl PublicInput {
+    pub fn parse(bytes: &[u8]) -> Result<Self, Error> {
+        if bytes.len() > MAX_INPUT_BYTES {
             return Err(Error::Shape);
         }
-        let assignment: Self = serde_json::from_slice(bytes)?;
-        let proofs = definition
-            .operations
-            .iter()
-            .filter(|op| matches!(op, Operation::Verify { .. }))
-            .count();
-        if assignment.public.len() != definition.inputs.public
-            || assignment.private.len() != definition.inputs.private
-            || assignment.proofs.len() != proofs
-            || assignment
-                .public
-                .iter()
-                .chain(&assignment.private)
-                .any(|word| *word >= F::ORDER_U32)
+        let words: Vec<u32> = serde_json::from_slice(bytes)?;
+        if words.iter().any(|word| *word >= F::ORDER_U32) {
+            return Err(Error::Statement);
+        }
+        Ok(Self(words))
+    }
+}
+pub(super) struct Assignment {
+    pub(super) public: Vec<u32>,
+    pub(super) private: Vec<u32>,
+    pub(super) proofs: Vec<Artifact>,
+}
+impl Assignment {
+    pub(super) fn parse(
+        public: PublicInput,
+        bytes: &[u8],
+        inputs: InputsCount,
+        proof_count: usize,
+    ) -> Result<Self, Error> {
+        if bytes.len() > MAX_WITNESS_BYTES {
+            return Err(Error::Shape);
+        }
+        let witness: Witness = serde_json::from_slice(bytes)?;
+        if public.0.len() != inputs.public
+            || witness.private.len() != inputs.private
+            || witness.proofs.len() != proof_count
+            || witness.private.iter().any(|word| *word >= F::ORDER_U32)
         {
             return Err(Error::Shape);
         }
-        Ok(assignment)
-    }
-}
-pub struct CircuitJob<C> {
-    circuit: C,
-    assignment: Assignment,
-}
-pub type Job = CircuitJob<Circuit>;
-impl Job {
-    pub fn parse(circuit: Circuit, bytes: &[u8]) -> Result<Self, Error> {
-        let assignment = Assignment::parse(bytes, &circuit.definition)?;
         Ok(Self {
-            circuit,
-            assignment,
+            public: public.0,
+            private: witness.private,
+            proofs: witness.proofs,
         })
     }
 }
+
 #[derive(Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct Artifact {
-    circuit: String,
-    public: Vec<u32>,
-    proof: BatchStarkProof<Config>,
+    pub(super) circuit_id: CircuitId,
+    pub(super) public: Vec<u32>,
+    pub(super) proof: BatchStarkProof<Config>,
 }
 impl Artifact {
     pub fn parse(bytes: &[u8]) -> Result<Self, Error> {
@@ -234,29 +151,48 @@ impl Artifact {
         }
         Ok(serde_json::from_slice(bytes)?)
     }
-    pub fn circuit(&self) -> &str {
-        &self.circuit
+    pub fn circuit_id(&self) -> CircuitId {
+        self.circuit_id
     }
     pub fn public(&self) -> &[u32] {
         &self.public
     }
 }
 
-struct Child {
-    index: usize,
-    inputs: Inputs,
-    ops: Vec<NonPrimitiveOpId>,
+pub(super) enum ChildTarget {
+    Circuit(std::path::PathBuf),
+    Set([std::path::PathBuf; 2]),
 }
-struct Prepared {
-    circuit: Compiled<E>,
-    schema: StatementSchema,
-    prover: PreparedCircuitProver<Config>,
-    children: Vec<Prepared>,
-    wiring: Vec<Child>,
-    id: String,
+pub(super) struct Child {
+    pub(super) target: ChildTarget,
+    pub(super) proof: usize,
+    pub(super) inputs: Inputs,
+    pub(super) ops: Vec<NonPrimitiveOpId>,
 }
-fn equal(builder: &mut CircuitBuilder<E>, left: ExprId, right: ExprId) {
-    // Preserve bus creators; global ZERO would alias them.
+pub(super) struct Prepared {
+    pub(super) inputs: InputsCount,
+    pub(super) bindings: Vec<(usize, u32)>,
+    pub(super) circuit: Compiled<E>,
+    pub(super) schema: StatementSchema,
+    pub(super) prover: PreparedCircuitProver<Config>,
+    pub(super) wiring: Vec<Child>,
+    pub(super) id: CircuitId,
+}
+impl Prepared {
+    pub(super) fn check_statement(&self, public: &[u32]) -> Result<(), Error> {
+        if public.len() != self.inputs.public
+            || self
+                .bindings
+                .iter()
+                .any(|(position, word)| public.get(*position) != Some(word))
+        {
+            return Err(Error::Statement);
+        }
+        Ok(())
+    }
+}
+pub(super) fn equal(builder: &mut CircuitBuilder<E>, left: ExprId, right: ExprId) {
+    // Preserve bus creators; ZERO aliases them.
     let one = builder.define_const(E::ONE);
     let shifted_left = builder.add(left, one);
     let shifted_right = builder.add(right, one);
@@ -265,7 +201,10 @@ fn equal(builder: &mut CircuitBuilder<E>, left: ExprId, right: ExprId) {
     let zero = builder.add(shifted_left, negative);
     builder.connect(difference, zero);
 }
-fn base_words(builder: &mut CircuitBuilder<E>, words: &[ExprId]) -> Result<Vec<ExprId>, Error> {
+pub(super) fn base_words(
+    builder: &mut CircuitBuilder<E>,
+    words: &[ExprId],
+) -> Result<Vec<ExprId>, Error> {
     let mut result = Vec::new();
     for chunk in words.chunks(4) {
         let mut padded = chunk.to_vec();
@@ -277,7 +216,7 @@ fn base_words(builder: &mut CircuitBuilder<E>, words: &[ExprId]) -> Result<Vec<E
     }
     Ok(result)
 }
-fn statement_targets(
+pub(super) fn statement_targets(
     verifier: &CircuitVerifier<Config>,
     inputs: &Inputs,
 ) -> Result<Vec<ExprId>, Error> {
@@ -291,39 +230,72 @@ fn statement_targets(
         .cloned()
         .ok_or(Error::Shape)
 }
-fn compile(definition: &Definition) -> Result<Prepared, Error> {
-    let children = definition
-        .children
-        .iter()
-        .map(compile)
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut prepared = build(
-        definition,
-        |builder, child, _| {
-            let prepared = children.get(child).ok_or(Error::Shape)?;
-            let verifier = prepared.prover.verifier();
-            let count = verifier.statement_layout().schema().base_len();
-            let (inputs, ops) = shape::allocate(builder, &verifier, count)?;
-            let words = statement_targets(&verifier, &inputs)?;
-            Ok((
-                Child {
-                    index: child,
-                    inputs,
-                    ops,
-                },
-                words,
-            ))
+pub(super) fn fixed_child(
+    builder: &mut CircuitBuilder<E>,
+    call: &Verification,
+    wires: &[ExprId],
+    child: &Prepared,
+) -> Result<(Child, Vec<ExprId>), Error> {
+    let verifier = child.prover.verifier();
+    let count = verifier.statement_layout().schema().base_len();
+    let (inputs, ops) = shape::allocate(builder, &verifier, count)?;
+    bind_circuit_id(builder, call, wires, child.id)?;
+    let words = statement_targets(&verifier, &inputs)?;
+    for (position, word) in &child.bindings {
+        let expected = builder.define_const(E::from_u32(*word));
+        equal(
+            builder,
+            *words.get(*position).ok_or(Error::Shape)?,
+            expected,
+        );
+    }
+    Ok((
+        Child {
+            target: ChildTarget::Circuit(call.verifier.clone()),
+            proof: call.proof,
+            inputs,
+            ops,
         },
-        engine::prepare,
-    )?;
-    prepared.children = children;
-    Ok(prepared)
+        words,
+    ))
 }
-fn build(
+pub(super) fn compile(
+    definition: &Definition,
+    prepared: &std::collections::BTreeMap<std::path::PathBuf, Prepared>,
+    prepare: impl FnOnce(&Compiled<E>, &StatementSchema) -> Result<PreparedCircuitProver<Config>, Error>,
+) -> Result<Prepared, Error> {
+    build(
+        definition,
+        |builder, call, wires| {
+            fixed_child(
+                builder,
+                call,
+                wires,
+                prepared.get(&call.verifier).ok_or(Error::Shape)?,
+            )
+        },
+        prepare,
+    )
+}
+
+pub(super) fn bind_circuit_id(
+    builder: &mut CircuitBuilder<E>,
+    call: &Verification,
+    wires: &[ExprId],
+    id: CircuitId,
+) -> Result<(), Error> {
+    for (index, value) in call.circuit_id_wires.iter().zip(id.words()) {
+        let actual = builder.define_const(E::from_u32(*value));
+        equal(builder, *wires.get(*index).ok_or(Error::Shape)?, actual);
+    }
+    Ok(())
+}
+
+pub(super) fn build(
     definition: &Definition,
     mut child: impl FnMut(
         &mut CircuitBuilder<E>,
-        usize,
+        &Verification,
         &[ExprId],
     ) -> Result<(Child, Vec<ExprId>), Error>,
     prepare: impl FnOnce(&Compiled<E>, &StatementSchema) -> Result<PreparedCircuitProver<Config>, Error>,
@@ -361,8 +333,8 @@ fn build(
                     wires.extend(coefficients);
                 }
             }
-            Operation::Verify { child: index } => {
-                let (binding, words) = child(&mut builder, *index, &wires)?;
+            Operation::Verify(call) => {
+                let (binding, words) = child(&mut builder, call, &wires)?;
                 wires.extend(words);
                 wiring.push(binding);
             }
@@ -370,12 +342,12 @@ fn build(
     }
     for constraint in &definition.constraints {
         match constraint {
-            Equality::Equal { left, right } => equal(
+            Constraint::Equal { left, right } => equal(
                 &mut builder,
                 *wires.get(*left).ok_or(Error::Shape)?,
                 *wires.get(*right).ok_or(Error::Shape)?,
             ),
-            Equality::Bits { wire, bits } => {
+            Constraint::Bits { wire, bits } => {
                 builder.decompose_to_bits::<F>(
                     *wires.get(*wire).ok_or(Error::Shape)?,
                     usize::from(*bits),
@@ -386,17 +358,20 @@ fn build(
     let schema = builder.set_statement_exports::<F>(&exports)?;
     let circuit = builder.build()?;
     let prover = prepare(&circuit, &schema)?;
+    let id = CircuitId::from_key(key(&prover.verifier())?);
     Ok(Prepared {
+        inputs: definition.inputs,
+        bindings: Vec::new(),
         circuit,
         schema,
         prover,
-        children: Vec::new(),
         wiring,
-        id: identity(definition)?,
+        id,
     })
 }
-fn checked_values(proof: &Artifact, prepared: &Prepared) -> Result<Vec<F>, Error> {
-    if proof.circuit != prepared.id || proof.public.iter().any(|v| *v >= F::ORDER_U32) {
+pub(super) fn checked_values(proof: &Artifact, prepared: &Prepared) -> Result<Vec<F>, Error> {
+    prepared.check_statement(&proof.public)?;
+    if proof.circuit_id != prepared.id || proof.public.iter().any(|v| *v >= F::ORDER_U32) {
         return Err(Error::Statement);
     }
     let values = proof.public.iter().copied().map(F::new).collect::<Vec<_>>();
@@ -409,7 +384,7 @@ fn checked_values(proof: &Artifact, prepared: &Prepared) -> Result<Vec<F>, Error
     verifier.verify(&proof.proof, &values)?;
     Ok(values)
 }
-fn prove_prepared<'a>(
+pub(super) fn prove_prepared<'a>(
     prepared: &Prepared,
     assignment: Assignment,
     resolve: impl Fn(&Child, &Artifact) -> Result<(&'a Prepared, Vec<E>), Error>,
@@ -422,9 +397,13 @@ fn prove_prepared<'a>(
     let children = prepared
         .wiring
         .iter()
-        .zip(&proofs)
-        .map(|(wiring, proof)| resolve(wiring, proof))
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|wiring| {
+            let proof = proofs.get(wiring.proof).ok_or(Error::Shape)?;
+            let (child, extra) = resolve(wiring, proof)?;
+            let values = checked_values(proof, child)?;
+            Ok((wiring, proof, child, extra, values))
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
     let mut private = values
         .iter()
         .chain(&private)
@@ -432,24 +411,29 @@ fn prove_prepared<'a>(
         .map(E::from_u32)
         .collect::<Vec<_>>();
     let mut public = Vec::new();
-    for ((wiring, proof), (child, extra)) in prepared.wiring.iter().zip(&proofs).zip(&children) {
-        let values = checked_values(proof, child)?;
+    for (wiring, proof, child, extra, values) in &children {
         let verifier = child.prover.verifier();
-        let values = verifier.table_public_values(&values)?;
+        let values = verifier.table_public_values(values)?;
         let (a, b) =
             wiring
                 .inputs
                 .try_pack_values(&values, &proof.proof.proof, verifier.common_data())?;
         public.extend(a);
         private.extend(b);
-        private.extend(extra);
+        private.extend(extra.iter().copied());
     }
     let mut runner = prepared.circuit.runner();
     runner.set_public_inputs(&public)?;
     runner.set_private_inputs(&private)?;
-    for ((wiring, proof), (child, _)) in prepared.wiring.iter().zip(&proofs).zip(&children) {
-        let values = proof.public.iter().copied().map(F::new).collect::<Vec<_>>();
-        <Backend as TrustedPcsRecursionBackend<Config,BatchOnly,4>>::set_private_data_for_trusted_batch(&engine::backend(),&child.prover.verifier(),&proof.proof,&values,&mut runner,&wiring.ops)?;
+    for (wiring, proof, child, _, values) in &children {
+        <Backend as TrustedPcsRecursionBackend<Config, BatchOnly, 4>>::set_private_data_for_trusted_batch(
+            &engine::backend(),
+            &child.prover.verifier(),
+            &proof.proof,
+            values,
+            &mut runner,
+            &wiring.ops,
+        )?;
     }
     let traces = runner.run()?;
     let proof = engine::prover(engine::private_config()?, &prepared.schema)
@@ -463,42 +447,13 @@ fn prove_prepared<'a>(
         )
         .prove_all_tables(&traces, &prepared.prover.prover_data())?;
     let artifact = Artifact {
-        circuit: prepared.id.clone(),
+        circuit_id: prepared.id,
         public: values,
         proof,
     };
     checked_values(&artifact, prepared)?;
     Ok(artifact)
 }
-pub fn prove(job: Job, threads: NonZeroUsize) -> Result<Artifact, Error> {
-    engine::run(threads, move || {
-        let prepared = compile(&job.circuit.definition)?;
-        prove_prepared(&prepared, job.assignment, |wiring, _| {
-            Ok((
-                prepared.children.get(wiring.index).ok_or(Error::Shape)?,
-                Vec::new(),
-            ))
-        })
-    })
-}
-
-pub fn verify(circuit: Circuit, proof: Artifact, threads: NonZeroUsize) -> Result<Vec<u32>, Error> {
-    if proof.public.len() != circuit.public_count() {
-        return Err(Error::Statement);
-    }
-    engine::run(threads, move || {
-        let prepared = compile(&circuit.definition)?;
-        checked_values(&proof, &prepared)?;
-        Ok(proof.public)
-    })
-}
-
 #[cfg(test)]
 #[path = "../../tests/controls/prover.rs"]
-mod tests;
-
-#[path = "family.rs"]
-pub mod family;
-
-#[path = "program.rs"]
-pub mod program;
+pub(super) mod tests;

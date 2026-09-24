@@ -204,7 +204,7 @@ async fn native_quic_attestation_binds_identity_session_and_disclosure() {
                 assert_eq!(fs::read_dir(dir.path()).unwrap().count(),4,"waiting for a peer creates no temporary log");
                 if collision { fs::write(&report_path, b"another writer").unwrap(); }
                 let request_path = dir.path().join("request.json");
-                fs::write(&request_path,serde_json::to_vec(&json!({"method":"POST","url":format!("https://localhost:{}/balance",target.port()),"headers":[["content-type","application/json"],["cookie","SECRET"]],"body_base64":"e30="})).unwrap()).unwrap();
+                fs::write(&request_path,serde_json::to_vec_pretty(&json!({"method":"POST","url":format!("https://localhost:{}/balance",target.port()),"headers":[["content-type","application/json"],["cookie","SECRET"]],"body_base64":"e30="})).unwrap()).unwrap();
                 let response_bytes=if matches!(case, Case::ReceiveLimit | Case::ExcessResponse) {
                     let mut bytes=b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_vec();
                     bytes.extend_from_slice(fixture::BODY.as_bytes());
@@ -222,7 +222,7 @@ async fn native_quic_attestation_binds_identity_session_and_disclosure() {
                     Case::SentOnly => json!({"sent":[{"bytes":[0,1]},{"bytes":[2,3]}],"received":[]}),
                     Case::Body | Case::WrongVerifier | Case::WrongTarget | Case::WrongSession | Case::WrongTrust => json!({"sent":[],"received":["body"]}),
                 };
-                fs::write(dir.path().join("disclosure.json"),serde_json::to_vec(&policy).unwrap()).unwrap();
+                fs::write(dir.path().join("disclosure.json"),serde_json::to_vec_pretty(&policy).unwrap()).unwrap();
                 let mut client_command = Command::new(env!("CARGO_BIN_EXE_proof-client"));
                 client_command
                     .args([

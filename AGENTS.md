@@ -1,18 +1,8 @@
 # Engineering Contract
 
-This file governs the repository. `README.md` owns setup and runnable commands.
+This file defines reusable engineering rules. `README.md` owns project-specific architecture,
+setup, commands and operational policies.
 On conflict, this file wins. Language-specific rules apply only to source in that language.
-
-The Cargo workspace lives in `crates/`; the npm workspace contains `extension/`.
-The binary is Rust. `extension/` is a manually loaded Chrome demo using plain `.mjs`
-and JSDoc, with no build step or browser tests. It is excluded from JavaScript mutation testing.
-Follow PayMoney's npm workspace conventions: declare development dependencies at the root,
-commit `package-lock.json`, and use standard npm resolution. Keep tooling configuration minimal.
-
-CLI examples use `cargo run --release --locked --bin proof-client -- ...`.
-The owner performs installations, Chrome registration, commits and pushes manually.
-Cargo tool installations use a repository-local `--root` under `target/`; do not install globally
-or change persistent PATH settings.
 
 For review, diagnosis, or explanation, inspect and report without editing. For a requested change,
 preserve existing work, make the smallest in-scope change, and run the relevant documented checks.
@@ -243,12 +233,11 @@ server-truth (the server and its clients) ⊏ client-truth (one browser).
 
 - **Computation is pushed to the highest label at which it is feasible**, so private inputs never
   flow downward. Feasibility is _measured_, not assumed.
-- Moving a value down — client-truth to the server — is declassification, and a defect.
+- Moving a value down — client-truth to the server — is declassification and requires explicit
+  authorization.
 - Where full offload is infeasible, minimize what crosses: a commitment, a blinded value, a partial
   computation.
-- For the explicitly authorized TLS disclosure flow, only user-selected authenticated transcript
-  ranges may be declassified to the verifier. Private requests, witnesses and undisclosed response
-  bytes remain local; protocol metadata and transcript lengths are part of the declared baseline.
+- Document authorized disclosures, recipients and exposed metadata in `README.md`.
 
 ---
 
@@ -357,10 +346,9 @@ Few tests, well designed.
 
 ## Verification
 
-`README.md` owns local check commands and tool versions; `rust-toolchain.toml` pins Rust.
-Run the checks relevant to the change and report only what ran. There is no CI or custom lint-rule
-suite at this stage. Use rustfmt, Clippy, Rust tests, Oxfmt, Oxlint and JSDoc type checking.
-For Rust behavior changes, run the documented mutation scope. Constructors, input boundaries,
+`README.md` owns check commands, tool versions, test scopes and environment limitations.
+Run the checks relevant to the change and report only what ran.
+For behavior changes, run the documented mutation scope. Constructors, input boundaries,
 ownership, confidentiality and data evolution still require review.
 
 ## Provenance

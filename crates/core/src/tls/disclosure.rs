@@ -159,7 +159,7 @@ fn json_fields(
     bytes: &[u8],
     selections: &[&Pointer],
 ) -> Result<Vec<Range<usize>>, DisclosureError> {
-    // Value enforces a recursion limit before Pest allocates its syntax tree.
+    // Bound depth before PEG parsing.
     check_depth(&serde_json::from_slice::<serde_json::Value>(bytes)?, 0)?;
     let text = std::str::from_utf8(bytes)?;
     let mut parsed = JsonParser::parse(Rule::document, text)?;

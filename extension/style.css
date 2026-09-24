@@ -3,7 +3,7 @@
   :root {
     color-scheme: light dark;
     font-family: system-ui, sans-serif;
-    /* Policy: consistent control spacing and room for manual file-path entry. */
+    /* Policy: spacing and path-entry width. */
     --space: 1rem;
     --form-width: 28em;
   }

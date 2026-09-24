@@ -2989,6 +2989,7 @@ dependencies = [
  "p3-symmetric",
  "proof-client-core",
  "proptest",
+ "rand 0.10.3",
  "rcgen",
  "serde",
  "serde_json",

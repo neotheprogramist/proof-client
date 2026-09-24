@@ -1,7 +1,6 @@
 // @ts-check
-/// <reference types="chrome" />
 const host = "io.github.neotheprogramist.proof_client";
-const protocol = "proof-client/5";
+const protocol = "proof-client/7";
 const tags = Object.freeze({ ready: "ready", completed: "completed", failed: "failed" });
 /** @typedef {{event: "ready", address: string}} Ready */
 /** @typedef {{event: "completed", result: object}} Completed */
