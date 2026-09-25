@@ -262,3 +262,18 @@ index 26dc45b..21f690c 100644
  
      let prover = session_p
          .new_prover(ProverConfig::builder().build().unwrap())
+diff --git a/crates/tlsn/src/transcript_internal/auth.rs b/crates/tlsn/src/transcript_internal/auth.rs
+--- a/crates/tlsn/src/transcript_internal/auth.rs
++++ b/crates/tlsn/src/transcript_internal/auth.rs
+@@ -92,6 +92,11 @@
+     reveal: &RangeSet<usize>,
+     commit: &RangeSet<usize>,
+ ) -> Result<(ReferenceMap, PlaintextProof<'a>), PlaintextAuthError> {
++    if reveal.end().is_some_and(|end| end > plaintext.len())
++        || commit.end().is_some_and(|end| end > plaintext.len())
++    {
++        return Err(ErrorRepr::OutOfBounds.into());
++    }
+     let is_reveal_all = reveal == (0..plaintext.len());
+
+     let alloc_ranges = if is_reveal_all {

@@ -92,6 +92,11 @@ pub(crate) fn verify_plaintext<'a>(
     reveal: &RangeSet<usize>,
     commit: &RangeSet<usize>,
 ) -> Result<(ReferenceMap, PlaintextProof<'a>), PlaintextAuthError> {
+    if reveal.end().is_some_and(|end| end > plaintext.len())
+        || commit.end().is_some_and(|end| end > plaintext.len())
+    {
+        return Err(ErrorRepr::OutOfBounds.into());
+    }
     let is_reveal_all = reveal == (0..plaintext.len());
 
     let alloc_ranges = if is_reveal_all {

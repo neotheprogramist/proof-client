@@ -52,8 +52,8 @@
     "repository": "https://github.com/tlsnotary/tlsn",
     "commit": "47aee45b53e06648c1b2ad3689b367b8c923fdec",
     "base": "e3fb22089c6903c17a010618bb33753589e98044d8bbb2fb5cad1cc1985ad161",
-    "tree": "6f24bc9415979ec8efcec01089f8f0c0b6f87b39b5d556beb2fc823757e03423",
-    "patch": "473d4ac2cd0f4dadbf8b96cae3340ca5beef1e126a7d217e522bc5847f87889f",
+    "tree": "32da826d6e68be283f5d7af165d3da751e5519fd7341f6ef72e8bbbef043b3c6",
+    "patch": "952e2fa5f04259c2474174c3dee663ea2888b046592be70fa546442a7682ceac",
     "executables": [
       ".github/workflows/bench-commit.sh",
       "crates/attestation/tests/fixtures/generate_presentation_fixture.rs",

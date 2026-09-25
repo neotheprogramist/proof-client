@@ -75,7 +75,7 @@ enum Selection {
     Body,
     Json(Pointer),
 }
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(try_from = "Vec<WireSelection>")]
 pub struct MessageDisclosure(Vec<Selection>);
 impl TryFrom<Vec<WireSelection>> for MessageDisclosure {
@@ -124,6 +124,14 @@ impl TryFrom<String> for Pointer {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Disclosure {
+    pub sent: MessageDisclosure,
+    pub received: MessageDisclosure,
+    #[serde(default)]
+    pub commit: TranscriptSelections,
+}
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TranscriptSelections {
     pub sent: MessageDisclosure,
     pub received: MessageDisclosure,
 }
@@ -254,7 +262,7 @@ fn start_line(raw: &[u8], start: usize) -> Result<Range<usize>, DisclosureError>
     if length == 0 || raw.get(end..end + 2) != Some(b"\r\n") {
         return Err(DisclosureError::Http);
     }
-    Ok(start..end)
+    Ok(start..end + 2)
 }
 
 fn parse_http(raw: &[u8], direction: Direction<'_>) -> Result<Message, DisclosureError> {
@@ -430,7 +438,11 @@ pub fn select(
                         .filter(|(header, _)| name.as_str().eq_ignore_ascii_case(header))
                         .peekable();
                     matched.peek().ok_or(DisclosureError::Selector)?;
-                    ranges.extend(matched.map(|(_, range)| range.clone()));
+                    ranges.extend(
+                        matched
+                            .map(|(_, range)| start_line(raw, range.start))
+                            .collect::<Result<Vec<_>, _>>()?,
+                    );
                 }
                 Selection::Body => ranges.extend(
                     message

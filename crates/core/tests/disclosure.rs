@@ -247,7 +247,7 @@ fn interim_responses_never_disclose_final_headers_or_invent_a_body() {
             .iter()
             .flat_map(|range| raw[range].to_vec())
             .collect::<Vec<_>>(),
-        b"HTTP/1.1 200 OKContent-Length: 0"
+        b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n"
     );
 }
 
@@ -405,7 +405,7 @@ fn start_lines_cannot_disclose_headers_or_silently_select_nothing() {
                         let ranges = result.unwrap();
                         assert_eq!(
                             ranges.iter().collect::<Vec<_>>(),
-                            vec![prefix.len()..prefix.len() + line.len()]
+                            vec![prefix.len()..prefix.len() + line.len() + ending.len()]
                         );
                     } else {
                         assert!(result.is_err(), "{raw:?}");

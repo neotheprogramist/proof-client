@@ -58,8 +58,8 @@
         <h2>Serve / attest</h2>
         <p>
           Start Serve, wait for Ready, then run Attest with the same session ID. The verifier
-          receives selected bytes and transcript lengths; the private output contains the full
-          response.
+          receives selected bytes and transcript lengths; the private files contain the full HTTP
+          request and response.
         </p>
         <div class="forms">
           <form id="serve">
@@ -84,8 +84,12 @@
               />
               <label for="serve-target-ca">Target CA path (optional)</label
               ><input id="serve-target-ca" name="target-ca" type="text" />
-              <label for="serve-output">New redacted log path</label
-              ><input id="serve-output" name="output" type="text" required />
+              <label for="serve-sent-output">New redacted sent.txt path</label
+              ><input id="serve-sent-output" name="sent-output" type="text" required />
+              <label for="serve-recv-output">New redacted recv.txt path</label
+              ><input id="serve-recv-output" name="recv-output" type="text" required />
+              <label for="serve-metadata-output">New commitment metadata JSON path</label
+              ><input id="serve-metadata-output" name="metadata-output" type="text" required />
               <button type="submit">Serve</button>
             </fieldset>
             <button type="button" disabled>Cancel</button><output aria-live="polite"></output>
@@ -114,8 +118,14 @@
               ><input id="attest-verifier-ca" name="verifier-ca" type="text" />
               <label for="attest-target-ca">Target CA path (optional)</label
               ><input id="attest-target-ca" name="target-ca" type="text" />
-              <label for="attest-output">New private response path</label
-              ><input id="attest-output" name="output" type="text" required />
+              <label for="attest-sent-output">New private sent.txt path</label
+              ><input id="attest-sent-output" name="sent-output" type="text" required />
+              <label for="attest-recv-output">New private recv.txt path</label
+              ><input id="attest-recv-output" name="recv-output" type="text" required />
+              <label for="attest-metadata-output">New commitment metadata JSON path</label
+              ><input id="attest-metadata-output" name="metadata-output" type="text" required />
+              <label for="attest-secrets-output">New private opening secrets JSON path</label
+              ><input id="attest-secrets-output" name="secrets-output" type="text" required />
               <button type="submit">Attest</button>
             </fieldset>
             <button type="button" disabled>Cancel</button><output aria-live="polite"></output>

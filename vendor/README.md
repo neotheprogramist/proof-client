@@ -18,7 +18,7 @@ The cryptographic patches change five source files:
 - `Plonky3-recursion/circuit-prover/src/batch_stark_prover.rs`: export prepared
   proving data without generating an unused proof.
 
-TLSNotary alpha.15 also needs transport/scheduling patches:
+TLSNotary alpha.15 also needs these patches:
 
 - `tlsn-utils/mux/`: upstream [PR #111](https://github.com/tlsnotary/tlsn-utils/pull/111)
   at `42e4ea94`, including the driver wakeup fix: bounded active streams, retained
@@ -32,6 +32,8 @@ TLSNotary alpha.15 also needs transport/scheduling patches:
   partially started workers.
 - `tlsn/crates/tlsn/src/session.rs`: propagate fallible executor startup through
   `Session::new`, with call sites updated to handle the error.
+- `tlsn/crates/tlsn/src/transcript_internal/auth.rs`: reject reveal/commit ranges
+  beyond the authenticated transcript before plaintext allocation or indexing.
 
 The complete forward differences are in [patches](patches). No source is patched
 at build time. Never run consumer formatting over these upstream trees.

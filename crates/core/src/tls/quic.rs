@@ -18,7 +18,7 @@ use std::{
 use tlsn::{connection::DnsName, webpki::RootCertStore};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
-pub const ALPN: &[u8] = b"proof-client-tlsn/4";
+pub const ALPN: &[u8] = b"proof-client-tlsn/5";
 // Policy: bound correlation metadata before allocating a cryptographic session.
 const MAX_SESSION_BYTES: usize = 128;
 const MAX_START_BYTES: usize = br#"{"session":""}"#.len() + MAX_SESSION_BYTES;
@@ -111,6 +111,32 @@ struct Start {
 pub struct Receipt {
     session: SessionId,
     report: Report,
+}
+
+#[derive(Serialize)]
+pub struct Metadata<'a> {
+    session: &'a SessionId,
+    server_name: &'a str,
+    sent_len: usize,
+    received_len: usize,
+    commitments: &'a [tlsn::transcript::hash::PlaintextHash],
+}
+
+impl Receipt {
+    pub fn metadata(&self) -> Metadata<'_> {
+        let (sent_len, received_len) = self.report.lengths();
+        Metadata {
+            session: &self.session,
+            server_name: self.report.server_name(),
+            sent_len,
+            received_len,
+            commitments: self.report.commitments(),
+        }
+    }
+
+    pub fn report(&self) -> &Report {
+        &self.report
+    }
 }
 
 pub fn roots(pem: Option<&[u8]>) -> Result<RootCertStore, QuicError> {
@@ -217,8 +243,23 @@ impl Drop for Channel {
 
 #[derive(Serialize)]
 pub struct Attestation {
-    response: Vec<u8>,
+    transcript: tlsn::transcript::Transcript,
+    secrets: Vec<tlsn::transcript::TranscriptSecret>,
     receipt: Receipt,
+}
+
+impl Attestation {
+    pub fn transcript(&self) -> &tlsn::transcript::Transcript {
+        &self.transcript
+    }
+
+    pub fn secrets(&self) -> &[tlsn::transcript::TranscriptSecret] {
+        &self.secrets
+    }
+
+    pub fn receipt(&self) -> &Receipt {
+        &self.receipt
+    }
 }
 
 pub async fn attest(
@@ -248,7 +289,7 @@ pub async fn attest(
         let server = tokio::net::TcpStream::connect(request.address())
             .await?
             .compat();
-        let (mut io, (report, response)) =
+        let (mut io, (report, transcript, secrets)) =
             attest::attest_session(request, disclosure, io, server, target_roots).await?;
         let expected = Receipt {
             session,
@@ -266,7 +307,11 @@ pub async fn attest(
             quinn::ConnectionError::ApplicationClosed(close) if close.error_code == 0u8.into() => {}
             error => return Err(error.into()),
         }
-        Ok(Attestation { response, receipt })
+        Ok(Attestation {
+            transcript,
+            secrets,
+            receipt,
+        })
     })
     .await;
     complete(&socket, result).await

@@ -1,11 +1,28 @@
 {
-  "sent": [],
+  "sent": [
+    "start_line",
+    {
+      "header": "content-type"
+    }
+  ],
   "received": [
+    "start_line",
+    {
+      "header": "content-length"
+    },
     {
       "json": "/products/0/AvailableBalance"
     },
     {
       "json": "/products/0/currency"
     }
-  ]
+  ],
+  "commit": {
+    "sent": [],
+    "received": [
+      {
+        "json": "/products/0/account"
+      }
+    ]
+  }
 }

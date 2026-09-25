@@ -1874,6 +1874,7 @@ name = "mpz-hash"
 version = "0.1.0-alpha.6"
 source = "git+https://github.com/privacy-ethereum/mpz?rev=v0.1.0-alpha.6#6ebfe619490c3155a589fc6a3be83b0976de19dc"
 dependencies = [
+ "blake3",
  "itybity 0.3.3",
  "mpz-circuits",
  "mpz-core",
@@ -2995,6 +2996,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
+ "tlsn",
  "tokio",
  "tokio-util",
  "url",

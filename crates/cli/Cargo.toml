@@ -19,6 +19,7 @@ tempfile.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+tlsn.workspace = true
 rand.workspace = true
 p3-field.workspace = true
 p3-koala-bear.workspace = true

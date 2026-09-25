@@ -34,6 +34,7 @@ rustls = { version = "0.23.45", default-features = false, features = ["ring", "s
 rcgen = "0.14.10"
 tlsn = { git = "https://github.com/tlsnotary/tlsn", rev = "47aee45b53e06648c1b2ad3689b367b8c923fdec", default-features = false, features = [
   "mozilla-certs",
+  "hash-blake3",
 ] }
 p3-recursion = { git = "https://github.com/Plonky3/Plonky3-recursion", rev = "64884a20bab6bf0fc35fab0105cd5e356cee117e", features = [
   "parallel",

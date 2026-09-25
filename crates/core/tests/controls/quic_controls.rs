@@ -177,7 +177,7 @@ async fn fragmented_receipt_fits_the_transcript_budget() {
     };
     let receipt: Receipt = serde_json::from_value(json!({"session":"x".repeat(MAX_SESSION_BYTES),"report":{
         "kind":"live-verifier-accepted","server_name":"localhost","sent_len":attest::MAX_SENT,"received_len":attest::MAX_RECEIVED,
-        "sent":segments(attest::MAX_SENT),"received":segments(attest::MAX_RECEIVED)
+        "sent":segments(attest::MAX_SENT),"received":segments(attest::MAX_RECEIVED),"commitments":[]
     }})).unwrap();
     let mut io = futures::io::Cursor::new(Vec::new());
     Frame::encode(&receipt)
@@ -264,6 +264,9 @@ async fn attester_rejects_each_changed_acknowledgement_field() {
         Some(("/report/sent/0/bytes/0", json!(0))),
         Some(("/report/received/0/start", json!(0))),
         Some(("/report/received/0/bytes/0", json!(0))),
+        Some(("/report/commitments", json!([]))),
+        Some(("/report/commitments/0/direction", json!("Received"))),
+        Some(("/report/commitments/0/hash/value", json!(vec![0; 32]))),
     ] {
         let dir = tempfile::tempdir().unwrap();
         let target = fixture::Fixture::bind(dir.path(), "127.0.0.1:0".parse().unwrap())
@@ -285,7 +288,7 @@ async fn attester_rejects_each_changed_acknowledgement_field() {
         .unwrap();
         let request=Request::parse(&serde_json::to_vec(&json!({"method":"GET","url":format!("https://localhost:{}/balance",target.address().unwrap().port()),"headers":[],"body_base64":""})).unwrap()).unwrap();
         let disclosure =
-            Disclosure::parse(br#"{"sent":[{"bytes":[0,1]}],"received":["body"]}"#).unwrap();
+            Disclosure::parse(br#"{"sent":[{"bytes":[0,1]}],"received":["body"],"commit":{"sent":[{"bytes":[1,2]}],"received":[]}}"#).unwrap();
         let verifier = async {
             let connection = endpoint.accept().await.unwrap().await.unwrap();
             let (send, recv) = connection.accept_bi().await.unwrap();
@@ -337,7 +340,7 @@ async fn attester_rejects_each_changed_acknowledgement_field() {
             result.unwrap();
         } else {
             assert!(
-                matches!(result, Err(QuicError::Mismatch)),
+                matches!(result, Err(QuicError::Mismatch | QuicError::Frame)),
                 "{:?}",
                 result.err()
             );

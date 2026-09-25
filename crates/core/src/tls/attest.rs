@@ -4,7 +4,6 @@ use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, TryFutureExt};
 use http::{HeaderName, HeaderValue, Method};
 use serde::{Deserialize, Serialize};
 use std::{future::IntoFuture, time::Duration};
-use tlsn::webpki::RootCertStore;
 use tlsn::{
     Session,
     config::{
@@ -13,6 +12,15 @@ use tlsn::{
     },
     connection::{DnsName, ServerName},
     verifier::VerifierCommitStart,
+};
+use tlsn::{
+    hash::HashAlgId,
+    rangeset::{ops::Set, set::RangeSet},
+    transcript::{
+        Direction, Transcript, TranscriptCommitConfig, TranscriptCommitment,
+        TranscriptCommitmentKind, TranscriptSecret, hash::PlaintextHash,
+    },
+    webpki::RootCertStore,
 };
 
 // Policy: shared MPC transcript budgets.
@@ -51,6 +59,10 @@ pub enum AttestError {
     Policy,
     #[error("TLSN verification did not authenticate the server and transcript")]
     Missing,
+    #[error("invalid transcript commitment configuration")]
+    Commit(#[from] tlsn::transcript::TranscriptCommitConfigBuilderError),
+    #[error("invalid transcript ranges or length")]
+    Transcript,
     #[error("I/O failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("TLSN session failed")]
@@ -180,6 +192,7 @@ pub struct Report {
     received_len: usize,
     sent: Vec<Segment>,
     received: Vec<Segment>,
+    commitments: Vec<PlaintextHash>,
 }
 
 impl Report {
@@ -187,10 +200,143 @@ impl Report {
         &self.server_name
     }
 
+    pub fn redacted(&self) -> Result<Transcript, AttestError> {
+        Ok(Transcript::new(
+            redacted(
+                self.sent_len,
+                &self.sent,
+                self.commitments
+                    .iter()
+                    .filter(|c| c.direction == Direction::Sent),
+                MAX_SENT,
+            )?,
+            redacted(
+                self.received_len,
+                &self.received,
+                self.commitments
+                    .iter()
+                    .filter(|c| c.direction == Direction::Received),
+                MAX_RECEIVED,
+            )?,
+        ))
+    }
+
+    pub fn lengths(&self) -> (usize, usize) {
+        (self.sent_len, self.received_len)
+    }
+
+    pub fn commitments(&self) -> &[PlaintextHash] {
+        &self.commitments
+    }
+
     pub(crate) fn accepted(mut self) -> Self {
         self.kind = ReportKind::LiveVerifierAccepted;
         self
     }
+}
+
+// Policy: distinguish undisclosed bytes from authenticated hash commitments in text views.
+const HIDDEN_BYTE: &str = "🙈";
+const COMMITTED_BYTE: &str = "🔒";
+// Policy: one blinded BLAKE3 commitment per transcript direction.
+const COMMITMENT_HASH: HashAlgId = HashAlgId::BLAKE3;
+
+#[derive(Clone, Copy)]
+enum DisplayByte {
+    Hidden,
+    Committed,
+    Disclosed(u8),
+}
+
+fn redacted<'a>(
+    length: usize,
+    segments: &[Segment],
+    commitments: impl Iterator<Item = &'a PlaintextHash>,
+    limit: usize,
+) -> Result<Vec<u8>, AttestError> {
+    if length > limit {
+        return Err(AttestError::Transcript);
+    }
+    let mut bytes = vec![DisplayByte::Hidden; length];
+    for commitment in commitments {
+        for range in commitment.idx.iter() {
+            bytes
+                .get_mut(range)
+                .ok_or(AttestError::Transcript)?
+                .fill(DisplayByte::Committed);
+        }
+    }
+    for segment in segments {
+        let end = segment
+            .start
+            .checked_add(segment.bytes.len())
+            .ok_or(AttestError::Transcript)?;
+        let selected = bytes
+            .get_mut(segment.start..end)
+            .ok_or(AttestError::Transcript)?;
+        for (view, byte) in selected.iter_mut().zip(&segment.bytes) {
+            if !matches!(view, DisplayByte::Hidden) {
+                return Err(AttestError::Transcript);
+            }
+            *view = DisplayByte::Disclosed(*byte);
+        }
+    }
+    let mut output = Vec::new();
+    for byte in bytes {
+        match byte {
+            DisplayByte::Hidden => output.extend_from_slice(HIDDEN_BYTE.as_bytes()),
+            DisplayByte::Committed => output.extend_from_slice(COMMITTED_BYTE.as_bytes()),
+            DisplayByte::Disclosed(byte) => output.push(byte),
+        }
+    }
+    Ok(output)
+}
+
+fn hashes(commitments: Vec<TranscriptCommitment>) -> Result<Vec<PlaintextHash>, AttestError> {
+    commitments
+        .into_iter()
+        .map(|commitment| match commitment {
+            TranscriptCommitment::Hash(hash) => Ok(hash),
+            _ => Err(AttestError::Policy),
+        })
+        .collect()
+}
+
+fn admit_commitments(request: &tlsn::config::prove::ProveRequest) -> Result<(), AttestError> {
+    let (sent, received) = request.reveal().ok_or(AttestError::Missing)?;
+    let mut directions = std::collections::HashSet::new();
+    for (direction, ranges, algorithm) in request
+        .transcript_commit()
+        .into_iter()
+        .flat_map(|c| c.iter_hash())
+    {
+        let (revealed, limit) = match direction {
+            Direction::Sent => (sent, MAX_SENT),
+            Direction::Received => (received, MAX_RECEIVED),
+        };
+        if *algorithm != COMMITMENT_HASH
+            || !directions.insert(*direction)
+            || ranges.is_empty()
+            || ranges.end().ok_or(AttestError::Transcript)? > limit
+            || !ranges.is_disjoint(revealed)
+        {
+            return Err(AttestError::Policy);
+        }
+    }
+    Ok(())
+}
+
+fn commit_ranges(
+    bytes: &[u8],
+    direction: disclosure::Direction<'_>,
+    selections: &disclosure::MessageDisclosure,
+    revealed: &RangeSet<usize>,
+) -> Result<RangeSet<usize>, AttestError> {
+    let committed = disclosure::select(bytes, direction, selections)?;
+    if !committed.is_disjoint(revealed) {
+        return Err(AttestError::Transcript);
+    }
+    Ok(committed)
 }
 
 fn segments(
@@ -215,7 +361,7 @@ pub async fn attest_session<T, S>(
     verifier_socket: T,
     server_socket: S,
     roots: RootCertStore,
-) -> Result<(T, (Report, Vec<u8>)), AttestError>
+) -> Result<(T, (Report, Transcript, Vec<TranscriptSecret>)), AttestError>
 where
     T: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
@@ -268,23 +414,47 @@ where
             disclosure::Direction::Response(&request.method),
             &disclosure.received,
         )?;
-        let report = Report {
-            kind: ReportKind::ProverDisclosure,
-            server_name: request.domain.to_string(),
-            sent_len: transcript.sent().len(),
-            received_len: transcript.received().len(),
-            sent: segments(transcript.sent(), sent.iter())?,
-            received: segments(transcript.received(), received.iter())?,
-        };
-        let response = transcript.received().to_vec();
+        let commit_sent = commit_ranges(
+            transcript.sent(),
+            disclosure::Direction::Request,
+            &disclosure.commit.sent,
+            &sent,
+        )?;
+        let commit_recv = commit_ranges(
+            transcript.received(),
+            disclosure::Direction::Response(&request.method),
+            &disclosure.commit.received,
+            &received,
+        )?;
+        let mut commitments = TranscriptCommitConfig::builder(transcript);
+        commitments.default_kind(TranscriptCommitmentKind::Hash {
+            alg: COMMITMENT_HASH,
+        });
+        if !commit_sent.is_empty() {
+            commitments.commit_sent(&commit_sent)?;
+        }
+        if !commit_recv.is_empty() {
+            commitments.commit_recv(&commit_recv)?;
+        }
+        let private = transcript.clone();
         let mut config = ProveConfig::builder(transcript);
         config.server_identity();
         config.reveal_sent(&sent)?;
         config.reveal_recv(&received)?;
-        prover.prove(&config.build()?).await?;
+        config.transcript_commit(commitments.build()?);
+        let output = prover.prove(&config.build()?).await?;
+        let report = Report {
+            kind: ReportKind::ProverDisclosure,
+            server_name: request.domain.to_string(),
+            sent_len: private.sent().len(),
+            received_len: private.received().len(),
+            sent: segments(private.sent(), sent.iter())?,
+            received: segments(private.received(), received.iter())?,
+            commitments: hashes(output.transcript_commitments)?,
+        };
         prover.close().await?;
         handle.close();
-        Ok::<_, AttestError>((report, response))
+        Ok::<_, AttestError>((report, private, output.transcript_secrets))
     };
     futures::try_join!(driver.err_into::<AttestError>(), operation)
 }
@@ -322,6 +492,7 @@ where
         if !verifier.request().server_identity() {
             return Err(AttestError::Missing);
         }
+        admit_commitments(verifier.request())?;
         let (output, verifier) = verifier.accept().await?;
         verifier.close().await?;
         handle.close();
@@ -336,6 +507,7 @@ where
                 transcript.received_unsafe(),
                 transcript.received_authed().iter(),
             )?,
+            commitments: hashes(output.transcript_commitments)?,
         })
     };
     futures::try_join!(driver.err_into::<AttestError>(), operation)

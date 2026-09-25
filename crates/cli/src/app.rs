@@ -1,4 +1,4 @@
-use crate::files::{FileError, Output, read};
+use crate::files::{FileError, Output, distinct_outputs, read};
 use crate::{identity::IdentityError, stdio};
 use clap::{Args, Parser, Subcommand};
 use proof_client_core::{
@@ -89,8 +89,8 @@ pub enum Command {
         /// Explicit target CA bundle; otherwise use the pinned Mozilla roots.
         #[arg(long)]
         target_ca: Option<PathBuf>,
-        #[arg(short, long)]
-        output: PathBuf,
+        #[command(flatten)]
+        output: TranscriptPaths,
     },
 }
 impl Command {
@@ -118,15 +118,28 @@ impl Command {
                 target_ca,
                 output,
                 ..
-            } => vec![cert, key, output]
-                .into_iter()
-                .chain(target_ca)
-                .collect(),
-            Self::Attest(args) => vec![&args.request, &args.disclosure, &args.output]
-                .into_iter()
-                .chain(&args.verifier_ca)
-                .chain(&args.target_ca)
-                .collect(),
+            } => vec![
+                cert,
+                key,
+                &output.sent_output,
+                &output.recv_output,
+                &output.metadata_output,
+            ]
+            .into_iter()
+            .chain(target_ca)
+            .collect(),
+            Self::Attest(args) => vec![
+                &args.request,
+                &args.disclosure,
+                &args.output.sent_output,
+                &args.output.recv_output,
+                &args.output.metadata_output,
+                &args.secrets_output,
+            ]
+            .into_iter()
+            .chain(&args.verifier_ca)
+            .chain(&args.target_ca)
+            .collect(),
         };
         if paths.into_iter().any(|path| !path.is_absolute()) {
             return Err(CliError::AbsolutePath);
@@ -151,8 +164,19 @@ pub struct Attest {
     verifier_ca: Option<PathBuf>,
     #[arg(long)]
     target_ca: Option<PathBuf>,
+    #[command(flatten)]
+    output: TranscriptPaths,
     #[arg(long)]
-    output: PathBuf,
+    secrets_output: PathBuf,
+}
+#[derive(Args)]
+pub struct TranscriptPaths {
+    #[arg(long)]
+    sent_output: PathBuf,
+    #[arg(long)]
+    recv_output: PathBuf,
+    #[arg(long)]
+    metadata_output: PathBuf,
 }
 #[derive(thiserror::Error)]
 pub enum CliError {
@@ -271,8 +295,12 @@ pub fn execute(
             target_ca,
             output,
         } => {
-            let out = Output::prepare(&output)?;
-            let result = json!({"output": out.path()});
+            let [sent, recv, metadata] = distinct_outputs([
+                Output::prepare(&output.sent_output)?,
+                Output::prepare(&output.recv_output)?,
+                Output::prepare(&output.metadata_output)?,
+            ])?;
+            let result = json!({"sent_output": sent.path(), "recv_output": recv.path(), "metadata_output": metadata.path()});
             let config = quic::server_config(
                 &read(&cert, MAX_LOCAL_INPUT_BYTES)?,
                 &read(&key, MAX_LOCAL_INPUT_BYTES)?,
@@ -281,14 +309,26 @@ pub fn execute(
             runtime()?.block_on(async {
                 let verifier = quic::Verifier::bind(listen, config, session, &server_name, roots)?;
                 ready(verifier.local_addr()?)?;
-                verifier.verify(|receipt| out.publish(receipt)).await?;
+                verifier
+                    .verify(|receipt| {
+                        let transcript = receipt.report().redacted()?;
+                        sent.publish_bytes(transcript.sent())?;
+                        recv.publish_bytes(transcript.received())?;
+                        metadata.publish(&receipt.metadata())
+                    })
+                    .await?;
                 Ok::<_, CliError>(())
             })?;
             Ok(result)
         }
         Command::Attest(args) => {
-            let out = Output::prepare(&args.output)?;
-            let result = json!({"output": out.path()});
+            let [sent, recv, metadata, secrets] = distinct_outputs([
+                Output::prepare(&args.output.sent_output)?,
+                Output::prepare(&args.output.recv_output)?,
+                Output::prepare(&args.output.metadata_output)?,
+                Output::prepare(&args.secrets_output)?,
+            ])?;
+            let result = json!({"sent_output": sent.path(), "recv_output": recv.path(), "metadata_output": metadata.path(), "secrets_output": secrets.path()});
             let disclosure = Disclosure::parse(&read(&args.disclosure, MAX_LOCAL_INPUT_BYTES)?)?;
             let request = attest::Request::parse(&read(&args.request, attest::MAX_REQUEST_BYTES)?)?;
             let peer = quic::Peer::new(
@@ -304,7 +344,10 @@ pub fn execute(
                 args.session,
                 roots,
             ))?;
-            out.publish(&artifact)?;
+            sent.publish_bytes(artifact.transcript().sent())?;
+            recv.publish_bytes(artifact.transcript().received())?;
+            metadata.publish(&artifact.receipt().metadata())?;
+            secrets.publish(&artifact.secrets())?;
             Ok(result)
         }
     }
