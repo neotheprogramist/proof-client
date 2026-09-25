@@ -1,6 +1,6 @@
 use clap::Parser;
 use proof_client::{
-    app::{self, Cli, CliError},
+    app::{self, Cli, CliError, Execution},
     identity::parse_origin,
     stdio::{self, Event},
 };
@@ -19,11 +19,18 @@ fn main() -> Result<(), CliError> {
     };
     match (cli.command, cli.origin) {
         (Some(command), None) => {
-            let mut output = io::stdout().lock();
             let result = app::execute(command, |address| {
-                emit(&mut output, &Event::Ready { address })
+                emit(&mut io::stderr().lock(), &Event::Ready { address })
             })?;
-            emit(&mut output, &Event::Completed { result })?;
+            let mut output = io::stdout().lock();
+            match result {
+                Execution::Json(result) => emit(&mut output, &Event::Completed { result })?,
+                Execution::Http { bytes, .. } => {
+                    // PROOF: the user requested raw HTTP bytes from the authenticated exchange.
+                    output.write_all(&bytes)?;
+                    output.flush()?;
+                }
+            }
         }
         (None, Some(origin)) => {
             parse_origin(&origin)?;

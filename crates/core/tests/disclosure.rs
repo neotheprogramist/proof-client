@@ -4,16 +4,18 @@
     reason = "test observations are direct"
 )]
 use http::Method;
-use proof_client_core::tls::disclosure::{Direction, Disclosure, select};
+use proof_client_core::tls::disclosure::{Direction, Disclosure, DisclosureError, select};
 use proptest::prelude::*;
 use serde_json::json;
 
 fn config() -> Disclosure {
     Disclosure::parse(br#"{"sent":[],"received":[{"json":"/products/0/AvailableBalance"},{"json":"/products/0/currency"}]}"#).unwrap()
 }
+const RESPONSE_COOKIE: &str = "session=demo-response";
+
 fn content(body: &[u8]) -> Vec<u8> {
     let mut raw = format!(
-        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nSet-Cookie: SECRET\r\n\r\n",
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nSet-Cookie: {RESPONSE_COOKIE}\r\n\r\n",
         body.len()
     )
     .into_bytes();
@@ -29,7 +31,7 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(24))]
     #[test]
     fn selects_original_decimal_and_string_across_chunk_boundaries(amount in 0u64..1_000_000_000, chunk in 1usize..80) {
-        let body = format!(r#"{{"products":[{{"name":"Zażółć \\"","AvailableBalance":{amount}.1200,"currency":"PLN","account":"SECRET"}}]}}"#).replace("\\\\\"", "\\\"");
+        let body = format!(r#"{{"products":[{{"name":"Zażółć \\"","AvailableBalance":{amount}.1200,"currency":"PLN","account":"demo-account-01"}}]}}"#).replace("\\\\\"", "\\\"");
         let body = body.as_bytes();
         let normal = content(body);
         let expected = format!(r#""AvailableBalance":{amount}.1200"currency":"PLN""#).into_bytes();
@@ -65,11 +67,10 @@ fn ambiguous_and_invalid_inputs_fail_without_secret_diagnostics() {
             select(&raw, Direction::Response(&Method::GET), &config().received).unwrap_err();
         assert_eq!(format!("{error:?}"), error.to_string());
         assert!(!error.to_string().is_empty());
-        assert!(!format!("{error:?}").contains("SECRET"));
+        assert!(!format!("{error:?}").contains(RESPONSE_COOKIE));
     }
     for response in [
         b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n{}".as_slice(),
-        b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\n\r\n{}",
         b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 2\r\n\r\n{}",
     ] {
         assert!(
@@ -176,7 +177,10 @@ fn interim_responses_never_disclose_final_headers_or_invent_a_body() {
     let policy = Disclosure::parse(br#"{"sent":[],"received":["body"]}"#).unwrap();
     let body = b"public payload";
     for status in (100..200).filter(|status| *status != 101) {
-        let mut raw = format!("HTTP/1.1 {status} Interim\r\nLink: SECRET\r\n\r\n").into_bytes();
+        let mut raw = format!(
+            "HTTP/1.1 {status} Interim\r\nLink: </assets/app.css>; rel=preload; as=style\r\n\r\n"
+        )
+        .into_bytes();
         raw.extend(content(body));
         let ranges = select(&raw, Direction::Response(&Method::GET), &policy.received).unwrap();
         assert_eq!(
@@ -240,7 +244,7 @@ fn interim_responses_never_disclose_final_headers_or_invent_a_body() {
     let policy =
         Disclosure::parse(br#"{"sent":[],"received":["start_line",{"header":"content-length"}]}"#)
             .unwrap();
-    let raw = b"HTTP/1.1 103 Early Hints\r\nLink: SECRET\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+    let raw = b"HTTP/1.1 103 Early Hints\r\nLink: </assets/app.css>; rel=preload; as=style\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
     let ranges = select(raw, Direction::Response(&Method::GET), &policy.received).unwrap();
     assert_eq!(
         ranges
@@ -256,9 +260,9 @@ proptest! {
     #[test]
     fn body_selection_reveals_only_payload_for_any_body(body in proptest::collection::vec(any::<u8>(), 0..2048), chunk in 1usize..80) {
         let policy = Disclosure::parse(br#"{"sent":[],"received":["body"]}"#).unwrap();
-        let mut raw = b"HTTP/1.1 200 OK\r\nSet-Cookie: SECRET\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+        let mut raw = b"HTTP/1.1 200 OK\r\nSet-Cookie: session=demo-response\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
         for bytes in body.chunks(chunk) { raw.extend_from_slice(format!("{:x}\r\n",bytes.len()).as_bytes());raw.extend_from_slice(bytes);raw.extend_from_slice(b"\r\n"); }
-        raw.extend_from_slice(b"0\r\nSecret-Trailer: PRIVATE\r\n\r\n");
+        raw.extend_from_slice(b"0\r\nX-Trace-Id: demo-trace-01\r\n\r\n");
         for response in [content(&body), raw] {
             let ranges=select(&response,Direction::Response(&Method::GET),&policy.received).unwrap();
             let visible=ranges.iter().flat_map(|range|response[range].to_vec()).collect::<Vec<_>>();
@@ -327,8 +331,23 @@ fn json_pointers_preserve_literal_keys_root_and_array_indices() {
     }
 }
 #[test]
-fn invalid_lengths_and_bodyless_framing_are_rejected() {
+fn framing_enforces_lengths_and_content_encoding() {
     let policy = Disclosure::parse(br#"{"sent":[],"received":["start_line"]}"#).unwrap();
+    for encoding in ["identity", "IDENTITY", "gzip", "br"] {
+        let raw = format!(
+            "HTTP/1.1 200 OK\r\nContent-Encoding: {encoding}\r\nContent-Length: 1\r\n\r\nx"
+        );
+        let result = select(
+            raw.as_bytes(),
+            Direction::Response(&Method::GET),
+            &policy.received,
+        );
+        if encoding.eq_ignore_ascii_case("identity") {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(DisclosureError::Http)));
+        }
+    }
     for encoding in [
         "gzip",
         "gzip, chunked",
@@ -384,7 +403,10 @@ fn invalid_lengths_and_bodyless_framing_are_rejected() {
 fn start_lines_cannot_disclose_headers_or_silently_select_nothing() {
     let policy =
         Disclosure::parse(br#"{"sent":["start_line"],"received":["start_line"]}"#).unwrap();
-    for prefix in ["", "HTTP/1.1 103 Early Hints\r\nLink: PRIVATE\r\n\r\n"] {
+    for prefix in [
+        "",
+        "HTTP/1.1 103 Early Hints\r\nLink: </assets/app.css>; rel=preload; as=style\r\n\r\n",
+    ] {
         for leading in ["", "\r\n", "\n"] {
             for ending in ["\r\n", "\n"] {
                 for response in [false, true] {
@@ -394,7 +416,9 @@ fn start_lines_cannot_disclose_headers_or_silently_select_nothing() {
                         "GET / HTTP/1.1"
                     };
                     let prefix = if response { prefix } else { "" };
-                    let raw = format!("{prefix}{leading}{line}{ending}Secret: PRIVATE\r\n\r\n");
+                    let raw = format!(
+                        "{prefix}{leading}{line}{ending}X-Request-Id: demo-request-01\r\n\r\n"
+                    );
                     let direction = if response {
                         Direction::Response(&Method::GET)
                     } else {
@@ -415,7 +439,7 @@ fn start_lines_cannot_disclose_headers_or_silently_select_nothing() {
         }
     }
     for interim in [
-        "HTTP/1.1 103 Early Hints\nLink: PRIVATE\r\n\r\n",
+        "HTTP/1.1 103 Early Hints\nLink: </assets/app.css>; rel=preload; as=style\r\n\r\n",
         "\r\nHTTP/1.1 103 Early Hints\r\n\r\n",
     ] {
         let raw = format!("{interim}HTTP/1.1 200 OK\r\n\r\n");
@@ -427,5 +451,167 @@ fn start_lines_cannot_disclose_headers_or_silently_select_nothing() {
             )
             .is_err()
         );
+    }
+}
+
+struct FragmentedHttp<'a> {
+    bytes: &'a [u8],
+    chunk: usize,
+    eof: bool,
+}
+impl futures::AsyncRead for FragmentedHttp<'_> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+        output: &mut [u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        if self.bytes.is_empty() && !self.eof {
+            return std::task::Poll::Pending;
+        }
+        let size = self.chunk.min(output.len()).min(self.bytes.len());
+        output[..size].copy_from_slice(&self.bytes[..size]);
+        self.bytes = &self.bytes[size..];
+        std::task::Poll::Ready(Ok(size))
+    }
+}
+
+proptest::proptest! {
+    #[test]
+    fn framed_responses_finish_without_eof_and_preserve_body(
+        body in proptest::collection::vec(proptest::num::u8::ANY, 0..2048),
+        fragment in 1usize..128,
+        chunk in 1usize..80,
+    ) {
+        use futures::FutureExt;
+        for chunked in [false, true] {
+            let mut raw = b"HTTP/1.1 103 Early Hints\r\nLink: </app.css>\r\n\r\nHTTP/1.1 200 OK\r\nConnection: keep-alive\r\n".to_vec();
+            if chunked {
+                raw.extend_from_slice(b"Transfer-Encoding: chunked\r\n\r\n");
+                for part in body.chunks(chunk) {
+                    raw.extend_from_slice(format!("{:x}\r\n", part.len()).as_bytes());
+                    raw.extend_from_slice(part);
+                    raw.extend_from_slice(b"\r\n");
+                }
+                raw.extend_from_slice(b"0\r\nX-Trailer: value\r\n\r\n");
+            } else {
+                raw.extend_from_slice(format!("Content-Length: {}\r\n\r\n",body.len()).as_bytes());
+                raw.extend_from_slice(&body);
+            }
+            let mut reader = FragmentedHttp { bytes: &raw, chunk: fragment, eof: false };
+            let result = proof_client_core::tls::disclosure::receive(&mut reader,&http::Method::GET,raw.len()).now_or_never().unwrap().unwrap();
+            proptest::prop_assert_eq!(result.into_body(), body.clone());
+            let mut reader = FragmentedHttp { bytes: &raw, chunk: fragment, eof: true };
+            proptest::prop_assert!(proof_client_core::tls::disclosure::receive(&mut reader,&http::Method::GET,raw.len()-1).now_or_never().unwrap().is_err());
+        }
+    }
+}
+
+#[test]
+fn bodyless_and_close_delimited_responses_observe_their_boundaries() {
+    use futures::FutureExt;
+    for (method, raw, body) in [
+        (
+            http::Method::HEAD,
+            b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n".as_slice(),
+            b"".as_slice(),
+        ),
+        (
+            http::Method::GET,
+            b"HTTP/1.1 204 No Content\r\n\r\n".as_slice(),
+            b"".as_slice(),
+        ),
+        (
+            http::Method::GET,
+            b"HTTP/1.1 304 Not Modified\r\nContent-Length: 100\r\n\r\n".as_slice(),
+            b"".as_slice(),
+        ),
+        (
+            http::Method::GET,
+            b"HTTP/1.1 401 Unauthorized\r\n\r\ndenied".as_slice(),
+            b"denied".as_slice(),
+        ),
+    ] {
+        for fragment in 1..=raw.len() {
+            let mut reader = FragmentedHttp {
+                bytes: raw,
+                chunk: fragment,
+                eof: body.is_empty(),
+            };
+            if !body.is_empty() {
+                assert!(
+                    proof_client_core::tls::disclosure::receive(&mut reader, &method, raw.len())
+                        .now_or_never()
+                        .is_none()
+                );
+                reader.bytes = raw;
+                reader.eof = true;
+            }
+            let result =
+                proof_client_core::tls::disclosure::receive(&mut reader, &method, raw.len())
+                    .now_or_never()
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(result.into_body(), body);
+        }
+    }
+    for raw in [
+        b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nabc".as_slice(),
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n".as_slice(),
+    ] {
+        let mut reader = FragmentedHttp {
+            bytes: raw,
+            chunk: 2,
+            eof: true,
+        };
+        assert!(
+            proof_client_core::tls::disclosure::receive(&mut reader, &http::Method::GET, raw.len())
+                .now_or_never()
+                .unwrap()
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn surplus_after_one_response_is_independent_of_read_boundaries() {
+    use futures::FutureExt;
+    for (method, response, body) in [
+        (
+            Method::GET,
+            "HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\nA",
+            "A",
+        ),
+        (
+            Method::GET,
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nA\r\n0\r\n\r\n",
+            "A",
+        ),
+        (
+            Method::HEAD,
+            "HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n",
+            "",
+        ),
+        (Method::GET, "HTTP/1.1 204 No Content\r\n\r\n", ""),
+    ] {
+        let raw = format!("{response}HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nsecret");
+        for chunk in 1..=raw.len() {
+            let mut reader = FragmentedHttp {
+                bytes: raw.as_bytes(),
+                chunk,
+                eof: false,
+            };
+            let message =
+                proof_client_core::tls::disclosure::receive(&mut reader, &method, response.len())
+                    .now_or_never()
+                    .unwrap()
+                    .unwrap();
+            let policy =
+                Disclosure::parse(br#"{"sent":[],"received":["start_line","body"]}"#).unwrap();
+            let (ranges, _) = message
+                .resolve(&policy.received, &policy.commit.received)
+                .unwrap();
+            assert!(ranges.iter().all(|range| range.end <= response.len()));
+            assert_eq!(message.into_body(), body.as_bytes());
+        }
     }
 }

@@ -8,67 +8,53 @@ mod fixture;
 use proof_client_core::tls::attest::Request;
 use serde_json::json;
 #[test]
-fn rejects_unsafe_or_ambiguous_request_boundaries() {
-    let valid = json!({"url":"https://example.invalid", "method":"POST", "headers":[["cookie","SECRET"]], "body_base64":"e30="});
-    assert!(Request::parse(&serde_json::to_vec(&valid).unwrap()).is_ok());
+fn request_boundaries_reject_unsupported_framing_and_enforce_budget() {
+    use http::{HeaderName, HeaderValue, Method};
+    use proof_client_core::tls::attest::{AttestError, MAX_SENT};
     for url in [
         "http://example.com",
         "https://user:pass@example.com",
         "https://user@example.com",
         "https://:pass@example.com",
         "https://example.com/#fragment",
+        "https://127.0.0.1",
     ] {
-        let mut input = valid.clone();
-        input["url"] = json!(url);
-        assert!(Request::parse(&serde_json::to_vec(&input).unwrap()).is_err());
+        assert!(Request::new(url, Method::GET, vec![], vec![]).is_err());
     }
     for (name, value) in [
-        ("broken name", "x"),
-        ("a", "x\r\nCookie: SECRET"),
         ("transfer-encoding", "chunked"),
         ("expect", "100-continue"),
         ("host", "evil.invalid"),
         ("content-length", "2"),
-        ("connection", "keep-alive"),
         ("accept-encoding", "gzip"),
         ("upgrade", "h2c"),
     ] {
-        let mut input = valid.clone();
-        input["headers"] = json!([[name, value]]);
-        assert!(Request::parse(&serde_json::to_vec(&input).unwrap()).is_err());
+        assert!(
+            Request::new(
+                "https://example.invalid",
+                Method::GET,
+                vec![(
+                    HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                    HeaderValue::from_str(value).unwrap()
+                )],
+                vec![]
+            )
+            .is_err()
+        );
     }
-    for body in ["%", "e30", "e31="] {
-        let mut input = valid.clone();
-        input["body_base64"] = json!(body);
-        assert!(Request::parse(&serde_json::to_vec(&input).unwrap()).is_err());
-    }
-}
-#[test]
-fn request_budgets_accept_their_upper_boundaries() {
-    use proof_client_core::tls::attest::{AttestError, MAX_REQUEST_BYTES, MAX_SENT};
-
-    let framing = b"GET / HTTP/1.1\r\nhost: example.invalid\r\nconnection: close\r\naccept-encoding: identity\r\ncontent-length: 0\r\nx: \r\n\r\n";
+    let framing = b"GET / HTTP/1.1\r\nx: \r\nhost: example.invalid\r\n\r\n";
     for length in [MAX_SENT - 1, MAX_SENT, MAX_SENT + 1] {
-        let input = json!({"url":"https://example.invalid","method":"GET","headers":[["x","v".repeat(length-framing.len())]],"body_base64":""});
-        let result = Request::parse(&serde_json::to_vec(&input).unwrap());
+        let result = Request::new(
+            "https://example.invalid",
+            Method::GET,
+            vec![(
+                HeaderName::from_static("x"),
+                HeaderValue::from_str(&"v".repeat(length - framing.len())).unwrap(),
+            )],
+            vec![],
+        );
         if length <= MAX_SENT {
-            assert!(result.is_ok());
-        } else {
-            assert!(matches!(result, Err(AttestError::Limit)));
-        }
-    }
-    let encoded =
-        br#"{"url":"https://example.invalid","method":"GET","headers":[],"body_base64":""}"#;
-    for length in [
-        MAX_REQUEST_BYTES,
-        MAX_REQUEST_BYTES + 1,
-        MAX_REQUEST_BYTES + 2,
-    ] {
-        let mut input = encoded.to_vec();
-        input.resize(length, b' ');
-        let result = Request::parse(&input);
-        if length == MAX_REQUEST_BYTES {
-            assert!(result.is_ok());
+            assert_eq!(result.unwrap().bytes().len(), length);
         } else {
             assert!(matches!(result, Err(AttestError::Limit)));
         }
@@ -107,22 +93,23 @@ async fn rejected_protocol(config: impl tlsn::ProtocolConfig) {
 
 #[tokio::test]
 async fn rejects_proxy_and_each_unsupported_mpc_budget_before_setup() {
-    use proof_client_core::tls::attest::{MAX_RECEIVED, MAX_RECEIVED_ONLINE, MAX_SENT};
+    use proof_client_core::tls::attest::{MAX_RECEIVED, MAX_SENT};
     use tlsn::config::tls_commit::{mpc::MpcTlsConfig, proxy::ProxyTlsConfig};
 
     let baseline = || {
         MpcTlsConfig::builder()
             .max_sent_data(MAX_SENT)
             .max_recv_data(MAX_RECEIVED)
-            .max_recv_data_online(MAX_RECEIVED_ONLINE)
+            .max_recv_data_online(MAX_RECEIVED)
+            .defer_decryption_from_start(false)
     };
     for config in [
         baseline().max_sent_data(MAX_SENT + 1),
         baseline().max_recv_data(MAX_RECEIVED + 1),
-        baseline().max_recv_data_online(MAX_RECEIVED_ONLINE + 1),
+        baseline().max_recv_data_online(MAX_RECEIVED - 1),
         baseline().max_sent_records(1),
         baseline().max_recv_records_online(1),
-        baseline().defer_decryption_from_start(false),
+        baseline().defer_decryption_from_start(true),
     ] {
         rejected_protocol(config.build().unwrap()).await;
     }
@@ -158,7 +145,7 @@ proptest::proptest! {
         };
         let (sent_segments,sent_hash,sent_text)=sample(&sent,Direction::Sent);
         let (recv_segments,recv_hash,recv_text)=sample(&received,Direction::Received);
-        let report: proof_client_core::tls::attest::Report = serde_json::from_value(json!({
+        let report: proof_client_core::tls::attest::ReportData = serde_json::from_value(json!({
             "kind":"live-verifier-accepted", "server_name":"localhost",
             "sent_len":sent.len(), "received_len":received.len(), "sent":sent_segments, "received":recv_segments, "commitments":[sent_hash,recv_hash]
         })).unwrap();
@@ -170,8 +157,8 @@ proptest::proptest! {
 
 #[test]
 fn redacted_transcripts_enforce_lengths_and_disjoint_ranges() {
-    use proof_client_core::tls::attest::{AttestError, MAX_RECEIVED, MAX_SENT, Report};
-    let boundary: Report = serde_json::from_value(json!({"kind":"live-verifier-accepted","server_name":"localhost","sent_len":MAX_SENT,"received_len":MAX_RECEIVED,"sent":[],"received":[],"commitments":[]})).unwrap();
+    use proof_client_core::tls::attest::{AttestError, MAX_RECEIVED, MAX_SENT, ReportData};
+    let boundary: ReportData = serde_json::from_value(json!({"kind":"live-verifier-accepted","server_name":"localhost","sent_len":MAX_SENT,"received_len":MAX_RECEIVED,"sent":[],"received":[],"commitments":[]})).unwrap();
     let text = boundary.redacted().unwrap();
     assert_eq!(text.sent(), "🙈".repeat(MAX_SENT).as_bytes());
     assert_eq!(text.received(), "🙈".repeat(MAX_RECEIVED).as_bytes());
@@ -193,7 +180,7 @@ fn redacted_transcripts_enforce_lengths_and_disjoint_ranges() {
                 length
             });
             value[direction] = segments.clone();
-            let report: Report = serde_json::from_value(value).unwrap();
+            let report: ReportData = serde_json::from_value(value).unwrap();
             assert!(matches!(report.redacted(), Err(AttestError::Transcript)));
         }
     }
@@ -203,7 +190,7 @@ fn redacted_transcripts_enforce_lengths_and_disjoint_ranges() {
 async fn commitments_past_the_authenticated_transcript_are_rejected_without_panicking() {
     use futures::{AsyncReadExt, AsyncWriteExt, FutureExt};
     use proof_client_core::tls::{
-        attest::{self, MAX_RECEIVED, MAX_RECEIVED_ONLINE, MAX_SENT},
+        attest::{self, MAX_RECEIVED, MAX_SENT},
         quic,
     };
     use std::{future::IntoFuture, panic::AssertUnwindSafe};
@@ -235,7 +222,8 @@ async fn commitments_past_the_authenticated_transcript_are_rejected_without_pani
                     MpcTlsConfig::builder()
                         .max_sent_data(MAX_SENT)
                         .max_recv_data(MAX_RECEIVED)
-                        .max_recv_data_online(MAX_RECEIVED_ONLINE)
+                        .max_recv_data_online(MAX_RECEIVED)
+                        .defer_decryption_from_start(false)
                         .build()
                         .unwrap(),
                 )

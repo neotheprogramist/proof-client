@@ -73,7 +73,7 @@ pub fn write_frame(
     Ok(())
 }
 
-pub const PROTOCOL: &str = "proof-client/8";
+pub const PROTOCOL: &str = "proof-client/10";
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]

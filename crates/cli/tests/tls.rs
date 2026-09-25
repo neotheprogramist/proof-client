@@ -6,6 +6,7 @@
 )]
 #[path = "../../../examples/mbank/support/fixture.rs"]
 mod fixture;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -73,7 +74,7 @@ async fn launch(mut command: Command, native: bool) -> Child {
     child.stdin.take().unwrap().write_all(&bytes).await.unwrap();
     child
 }
-async fn readiness(reader: &mut BufReader<tokio::process::ChildStdout>, native: bool) -> Value {
+async fn readiness(reader: &mut (impl tokio::io::AsyncBufRead + Unpin), native: bool) -> Value {
     if native {
         let mut prefix = [0; 4];
         reader.read_exact(&mut prefix).await.unwrap();
@@ -89,18 +90,28 @@ async fn readiness(reader: &mut BufReader<tokio::process::ChildStdout>, native: 
     }
 }
 fn terminal_event(bytes: &[u8], native: bool) -> Value {
+    assert!(native);
+    let mut cursor = std::io::Cursor::new(bytes);
+    let frame = proof_client::stdio::read_frame(&mut cursor).unwrap();
+    assert_eq!(cursor.position() as usize, bytes.len());
+    serde_json::from_slice(&frame).unwrap()
+}
+fn output_bytes(output: &Output, native: bool) -> Vec<u8> {
     if native {
-        let mut cursor = std::io::Cursor::new(bytes);
-        let frame = proof_client::stdio::read_frame(&mut cursor).unwrap();
-        assert_eq!(cursor.position() as usize, bytes.len());
-        serde_json::from_slice(&frame).unwrap()
+        let event = terminal_event(&output.stdout, true);
+        assert_eq!(event["event"], "completed", "{event}");
+        STANDARD
+            .decode(event["result"]["stdout_base64"].as_str().unwrap())
+            .unwrap()
     } else {
-        serde_json::from_slice(bytes).unwrap()
+        output.stdout.clone()
     }
 }
 
 #[tokio::test]
-async fn native_quic_attestation_binds_identity_session_and_disclosure() {
+async fn native_quic_attestation_binds_identity_and_disclosure() {
+    let data = fixture::sample_data();
+    let body = data.body();
     #[derive(Clone, Copy, Debug)]
     enum Case {
         Body,
@@ -114,13 +125,14 @@ async fn native_quic_attestation_binds_identity_session_and_disclosure() {
         ExcessResponse,
         WrongVerifier,
         WrongTarget,
-        WrongSession,
         WrongTrust,
         Collision,
+        BrokenPipe,
     }
     for (case, native) in [
         (Case::Body, false),
         (Case::Fields, true),
+        (Case::Fields, false),
         (Case::Bytes, true),
         (Case::Empty, true),
         (Case::SentOnly, false),
@@ -130,9 +142,9 @@ async fn native_quic_attestation_binds_identity_session_and_disclosure() {
         (Case::ExcessResponse, false),
         (Case::WrongVerifier, false),
         (Case::WrongTarget, false),
-        (Case::WrongSession, true),
         (Case::WrongTrust, false),
         (Case::Collision, false),
+        (Case::BrokenPipe, false),
     ] {
         let verifier_name = if matches!(case, Case::WrongVerifier) {
             "wrong.invalid"
@@ -143,11 +155,6 @@ async fn native_quic_attestation_binds_identity_session_and_disclosure() {
             "wrong.invalid"
         } else {
             "localhost"
-        };
-        let session = if matches!(case, Case::WrongSession) {
-            "other"
-        } else {
-            "manual"
         };
         let target_ca = if matches!(case, Case::WrongTrust) {
             "verifier.pem"
@@ -162,6 +169,7 @@ async fn native_quic_attestation_binds_identity_session_and_disclosure() {
                 | Case::Empty
                 | Case::SentOnly
                 | Case::ReceiveLimit
+                | Case::BrokenPipe
         );
         let collision = matches!(case, Case::Collision);
         let started = std::time::Instant::now();
@@ -173,14 +181,8 @@ async fn native_quic_attestation_binds_identity_session_and_disclosure() {
                 let fixture = fixture::Fixture::bind(dir.path(), "127.0.0.1:0".parse().unwrap())
                     .await
                     .unwrap();
-                let target = fixture.address().unwrap();
-                let verified_sent = dir.path().join("verified-sent.txt");
-                let verified_recv = dir.path().join("verified-recv.txt");
-                let private_sent = dir.path().join("private-sent.txt");
-                let private_recv = dir.path().join("private-recv.txt");
                 let verified_metadata = dir.path().join("verified-metadata.json");
                 let private_metadata = dir.path().join("private-metadata.json");
-                let private_secrets = dir.path().join("private-secrets.json");
                 let mut verifier_command = Command::new(env!("CARGO_BIN_EXE_proof-client"));
                 verifier_command
                     .args([
@@ -189,8 +191,7 @@ async fn native_quic_attestation_binds_identity_session_and_disclosure() {
                         "127.0.0.1:0",
                         "--server-name",
                         expected_target,
-                        "--session",
-                        "manual",
+
                     ])
                     .arg("--cert")
                     .arg(dir.path().join("verifier.pem"))
@@ -198,10 +199,6 @@ async fn native_quic_attestation_binds_identity_session_and_disclosure() {
                     .arg(dir.path().join("verifier.key"))
                     .arg("--target-ca")
                     .arg(dir.path().join(target_ca))
-                    .arg("--sent-output")
-                    .arg(&verified_sent)
-                    .arg("--recv-output")
-                    .arg(&verified_recv)
                     .arg("--metadata-output").arg(&verified_metadata)
                     .stdin(Stdio::null())
                     .stdout(Stdio::piped())
@@ -209,22 +206,25 @@ async fn native_quic_attestation_binds_identity_session_and_disclosure() {
                     .kill_on_drop(true);
                 let mut verifier = launch(verifier_command, native).await;
                 let mut stdout = BufReader::new(verifier.stdout.take().unwrap());
-                let ready = readiness(&mut stdout, native).await;
+                let ready = if native { readiness(&mut stdout, true).await } else {
+                    let mut stderr = BufReader::new(verifier.stderr.take().unwrap());
+                    let ready = readiness(&mut stderr, false).await;
+                    verifier.stderr = Some(stderr.into_inner());
+                    ready
+                };
                 assert_eq!(ready["event"], "ready");
                 let address = ready["address"].as_str().unwrap();
-                assert_eq!(fs::read_dir(dir.path()).unwrap().count(),4,"waiting for a peer creates no temporary log");
-                if collision { fs::write(&verified_sent, b"another writer").unwrap(); }
-                let request_path = dir.path().join("request.json");
-                fs::write(&request_path,serde_json::to_vec_pretty(&json!({"method":"POST","url":format!("https://localhost:{}/balance",target.port()),"headers":[["content-type","application/json"],["cookie","SECRET"]],"body_base64":"e30="})).unwrap()).unwrap();
+                let before = fs::read_dir(dir.path()).unwrap().count();
+                if collision { fs::write(&verified_metadata, b"another writer").unwrap(); }
                 let response_bytes=if matches!(case, Case::ReceiveLimit | Case::ExcessResponse) {
                     let mut bytes=b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_vec();
-                    bytes.extend_from_slice(fixture::BODY.as_bytes());
+                    bytes.extend_from_slice(body.as_bytes());
                     bytes.resize(proof_client_core::tls::attest::MAX_RECEIVED + usize::from(matches!(case, Case::ExcessResponse)), b' ');
                     bytes
                 } else if matches!(case, Case::MixedStartLine) {
-                    format!("HTTP/1.1 200 OK\nSet-Cookie: SECRET\r\n\r\n{}", fixture::BODY).into_bytes()
+                    format!("HTTP/1.1 200 OK\nSet-Cookie: {}\r\n\r\n{body}", data.response_cookie).into_bytes()
                 } else { fixture::response() };
-                let body_start=response_bytes.len()-fixture::BODY.len();
+                let body_start=response_bytes.len()-body.len();
                 let policy=match case {
                     Case::Fields | Case::Collision => serde_json::from_str::<Value>(fixture::DISCLOSURE).unwrap(),
                     Case::Bytes => json!({"sent":[{"bytes":[0,1]},{"bytes":[2,3]}],"received":(body_start..response_bytes.len()).step_by(2).map(|i|json!({"bytes":[i,i+1]})).collect::<Vec<_>>()}),
@@ -232,7 +232,7 @@ async fn native_quic_attestation_binds_identity_session_and_disclosure() {
                     Case::Overlap => json!({"sent":[],"received":["body"],"commit":{"sent":[],"received":["body"]}}),
                     Case::MixedStartLine => json!({"sent":[],"received":["start_line"]}),
                     Case::SentOnly => json!({"sent":[{"bytes":[0,1]},{"bytes":[2,3]}],"received":[]}),
-                    Case::Body | Case::WrongVerifier | Case::WrongTarget | Case::WrongSession | Case::WrongTrust => json!({"sent":[],"received":["body"]}),
+                    Case::Body | Case::BrokenPipe | Case::WrongVerifier | Case::WrongTarget | Case::WrongTrust => json!({"sent":[],"received":["body"]}),
                 };
                 fs::write(dir.path().join("disclosure.json"),serde_json::to_vec_pretty(&policy).unwrap()).unwrap();
                 let mut client_command = Command::new(env!("CARGO_BIN_EXE_proof-client"));
@@ -243,29 +243,29 @@ async fn native_quic_attestation_binds_identity_session_and_disclosure() {
                         address,
                         "--verifier-name",
                         verifier_name,
-                        "--session",
-                        session,
+
                     ])
                     .arg("--verifier-ca")
                     .arg(dir.path().join("verifier.pem"))
                     .arg("--target-ca")
                     .arg(dir.path().join(target_ca))
                     .arg("--disclosure").arg(dir.path().join("disclosure.json"))
-                    .arg("--request").arg(&request_path)
-                    .arg("--sent-output").arg(&private_sent)
-                    .arg("--recv-output").arg(&private_recv)
+                    .arg("--url").arg(format!("https://localhost:{}/balance", fixture.address().unwrap().port()))
+                    .args(["-H", "content-type: application/json", "-H", "Connection: keep-alive", "-b", &data.request_cookie, "--data-raw", "{}"])
                     .arg("--metadata-output").arg(&private_metadata)
-                    .arg("--secrets-output").arg(&private_secrets)
                     .stdin(Stdio::null())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .kill_on_drop(true);
                 let mut client = launch(client_command, native).await;
-                let client_stdout = client.stdout.take().unwrap();
+                let client_stdout: Box<dyn AsyncRead + Unpin> = if matches!(case, Case::BrokenPipe) {
+                    drop(client.stdout.take());
+                    Box::new(tokio::io::empty())
+                } else { Box::new(client.stdout.take().unwrap()) };
                 let client = async {
                     let output = finish(client, client_stdout).await;
-                    assert_eq!(output.status.success(), native || success, "{case:?}: {}", String::from_utf8_lossy(&output.stderr));
-                    if native { assert_eq!(terminal_event(&output.stdout, true)["event"], if success { "completed" } else { "failed" }, "{}", terminal_event(&output.stdout, true)); }
+                    assert_eq!(output.status.success(), native || (success && !matches!(case, Case::BrokenPipe)) || collision, "{case:?}: {}", String::from_utf8_lossy(&output.stderr));
+                    if native { assert_eq!(terminal_event(&output.stdout, true)["event"], if success || collision { "completed" } else { "failed" }, "{}", terminal_event(&output.stdout, true)); }
                     output
                 };
                 let peers = async { tokio::join!(client, finish(verifier, stdout)) };
@@ -279,18 +279,26 @@ async fn native_quic_attestation_binds_identity_session_and_disclosure() {
                 };
                 let verifier_errors = String::from_utf8_lossy(&verifier.stderr);
                 assert_eq!(verifier.status.success(), native || success, "{verifier_errors}");
-                assert!(!String::from_utf8_lossy(&client.stderr).contains("SECRET"));
-                assert!(!verifier_errors.contains("SECRET"));
-                assert_eq!(verified_sent.exists(), success || collision);
-                if collision { assert_eq!(fs::read(&verified_sent).unwrap(), b"another writer"); }
-                assert_eq!(private_sent.exists(), success);
-                assert_eq!(private_recv.exists(), success);
-                assert_eq!(verified_recv.exists(), success);
-                for path in [&verified_metadata, &private_metadata, &private_secrets] { assert_eq!(path.exists(), success); }
+                for value in [&data.request_cookie, &data.response_cookie, &data.account] {
+                    for output in [&client.stderr, &verifier.stderr] {
+                        assert!(!output.windows(value.len()).any(|bytes| bytes == value.as_bytes()));
+                    }
+                }
+                assert_eq!(verified_metadata.exists(), success || collision);
+                assert_eq!(private_metadata.exists(), success || collision);
+                if collision {
+                    assert_eq!(fs::read(&verified_metadata).unwrap(), b"another writer");
+                    assert_eq!(output_bytes(&client, native), body.as_bytes());
+                    assert!(verifier.stdout.is_empty());
+                    return;
+                }
                 if success {
                     let request = request.unwrap();
-                    assert_eq!(fs::read(&private_sent).unwrap(), request);
-                    assert_eq!(fs::read(&private_recv).unwrap(), response_bytes);
+                    let expected_body = if matches!(case, Case::ReceiveLimit) {
+                        response_bytes[response_bytes.windows(4).position(|w|w==b"\r\n\r\n").unwrap()+4..].to_vec()
+                    } else { body.as_bytes().to_vec() };
+                    if matches!(case, Case::BrokenPipe) { assert!(client.stdout.is_empty()); }
+                    else { assert_eq!(output_bytes(&client, native), expected_body); }
                     let positions = |bytes: &[u8], field: &[u8]| {
                         let start = bytes.windows(field.len()).position(|slice| slice == field).unwrap();
                         start..start + field.len()
@@ -301,44 +309,50 @@ async fn native_quic_attestation_binds_identity_session_and_disclosure() {
                         _ => Vec::new(),
                     };
                     let recv_positions = match case {
-                        Case::Fields => [b"HTTP/1.1 200 OK\r\n".as_slice(),format!("Content-Length: {}\r\n",fixture::BODY.len()).as_bytes(),br#""AvailableBalance":42.1200"#.as_slice(), br#""currency":"PLN""#.as_slice()].into_iter().flat_map(|field| positions(&response_bytes,field)).collect::<Vec<_>>(),
-                        Case::Body => (body_start..response_bytes.len()).collect(),
+                        Case::Fields => [b"HTTP/1.1 200 OK\r\n".as_slice(),format!("Content-Length: {}\r\n",body.len()).as_bytes(),br#""AvailableBalance":42.1200"#.as_slice(), br#""currency":"PLN""#.as_slice()].into_iter().flat_map(|field| positions(&response_bytes,field)).collect::<Vec<_>>(),
+                        Case::Body | Case::BrokenPipe => (body_start..response_bytes.len()).collect(),
                         Case::Bytes => (body_start..response_bytes.len()).step_by(2).collect(),
                         Case::Empty | Case::SentOnly | Case::ReceiveLimit => Vec::new(),
-                        Case::WrongVerifier | Case::WrongTarget | Case::WrongSession | Case::WrongTrust | Case::Collision | Case::ExcessResponse | Case::MixedStartLine | Case::Overlap => unreachable!(),
+                        Case::WrongVerifier | Case::WrongTarget | Case::WrongTrust | Case::Collision | Case::ExcessResponse | Case::MixedStartLine | Case::Overlap => unreachable!(),
                     };
-                    let committed = if matches!(case,Case::Fields) { positions(&response_bytes,br#""account":"PRIVATE""#) } else { 0..0 };
-                    for (path, bytes, positions, committed) in [(&verified_sent, &request, sent_positions,0..0), (&verified_recv, &response_bytes, recv_positions,committed.clone())] {
-                        let expected = bytes.iter().enumerate().flat_map(|(i, byte)| {
+                    let committed = if matches!(case,Case::Fields) { positions(&response_bytes,format!(r#""account":"{}""#, data.account).as_bytes()) } else { 0..0 };
+                    let mut expected_transcript = b"--- Sent ---\n".to_vec();
+                    for (index, (bytes, positions, committed)) in [(&request, sent_positions, 0..0), (&response_bytes, recv_positions, committed.clone())].into_iter().enumerate() {
+                        if index == 1 { expected_transcript.extend_from_slice(b"\n--- Received ---\n"); }
+                        expected_transcript.extend(bytes.iter().enumerate().flat_map(|(i, byte)| {
                             if positions.contains(&i) { vec![*byte] } else if committed.contains(&i) { "🔒".as_bytes().to_vec() } else { "🙈".as_bytes().to_vec() }
-                        }).collect::<Vec<_>>();
-                        assert_eq!(fs::read(path).unwrap(), expected);
+                        }));
                     }
+                    assert_eq!(output_bytes(&verifier, native), expected_transcript);
                     let metadata: Value=serde_json::from_slice(&fs::read(&private_metadata).unwrap()).unwrap();
-                    assert_eq!(fs::read(&verified_metadata).unwrap(),fs::read(&private_metadata).unwrap());
-                    assert_eq!(metadata["session"],"manual");
+                    let mut public_metadata = metadata.clone();
+                    public_metadata.as_object_mut().unwrap().remove("openings");
+                    assert_eq!(serde_json::from_slice::<Value>(&fs::read(&verified_metadata).unwrap()).unwrap(), public_metadata);
+                    assert!(metadata.get("session").is_none());
                     assert_eq!(metadata["server_name"],"localhost");
                     assert_eq!(metadata["sent_len"],request.len());
                     assert_eq!(metadata["received_len"],response_bytes.len());
                     let hashes: Vec<tlsn::transcript::hash::PlaintextHash> = serde_json::from_value(metadata["commitments"].clone()).unwrap();
-                    let secrets: Vec<tlsn::transcript::TranscriptSecret> = serde_json::from_slice(&fs::read(&private_secrets).unwrap()).unwrap();
+                    let openings = metadata["openings"].as_array().unwrap();
                     assert_eq!(hashes.len(),usize::from(matches!(case,Case::Fields)));
-                    assert_eq!(secrets.len(),hashes.len());
-                    for (hash, secret) in hashes.iter().zip(secrets) {
+                    assert_eq!(openings.len(),hashes.len());
+                    for (hash, opening) in hashes.iter().zip(openings) {
+                        let secret: tlsn::transcript::TranscriptSecret = serde_json::from_value(opening["secret"].clone()).unwrap();
                         let tlsn::transcript::TranscriptSecret::Hash(secret) = secret else { panic!("unsupported secret") };
                         assert_eq!(hash.direction,tlsn::transcript::Direction::Received);
                         assert_eq!(hash.idx.iter().collect::<Vec<_>>(),vec![committed.clone()]);
                         assert_eq!(hash.idx,secret.idx);
                         assert_eq!(hash.direction,secret.direction);
                         assert_eq!(hash.hash.alg,secret.alg);
-                        let plaintext=hash.idx.iter().flat_map(|r|response_bytes[r].to_vec()).collect::<Vec<_>>();
+                        let plaintext: Vec<u8> = serde_json::from_value(opening["plaintext"].clone()).unwrap();
+                        assert_eq!(plaintext, hash.idx.iter().flat_map(|r|response_bytes[r].to_vec()).collect::<Vec<_>>());
                         let digest=tlsn::transcript::hash::hash_plaintext(&tlsn::hash::Blake3::default(),&plaintext,&secret.blinder);
                         assert_eq!(digest,hash.hash);
                         let mut changed=plaintext;
                         changed[0]^=1;
                         assert_ne!(tlsn::transcript::hash::hash_plaintext(&tlsn::hash::Blake3::default(),&changed,&secret.blinder),hash.hash);
                     }
-                    for path in [&verified_metadata,&private_metadata,&private_secrets] {
+                    for path in [&verified_metadata,&private_metadata] {
                         let raw=fs::read(path).unwrap();
                         let value:Value=serde_json::from_slice(&raw).unwrap();
                         assert!(raw.ends_with(b"\n"));
@@ -347,34 +361,21 @@ async fn native_quic_attestation_binds_identity_session_and_disclosure() {
                     }
                     let request = String::from_utf8(request).unwrap();
                     assert!(request.starts_with("POST /balance HTTP/1.1\r\n"));
-                    assert!(request.contains("cookie: SECRET\r\n"));
-                    assert!(request.contains("accept-encoding: identity\r\n"));
+                    assert!(request.contains(&format!("cookie: {}\r\n", data.request_cookie)));
+                    assert!(request.contains("connection: keep-alive\r\n"));
                     assert!(request.ends_with("\r\n\r\n{}"));
-                    for (output, sent, recv, metadata) in [
-                        (&client.stdout, &private_sent, &private_recv, &private_metadata),
-                        (&verifier.stdout, &verified_sent, &verified_recv, &verified_metadata),
-                    ] {
-                        for path in [sent, recv] {
-                        #[cfg(unix)] {
-                            use std::os::unix::fs::PermissionsExt;
-                            assert_eq!(fs::metadata(path).unwrap().permissions().mode() & 0o777,0o600);
+                    if native {
+                        for (output, metadata) in [(&client, &private_metadata), (&verifier, &verified_metadata)] {
+                            assert_eq!(terminal_event(&output.stdout, true)["result"]["metadata_output"], json!(metadata.canonicalize().unwrap()));
                         }
-                        }
-                        let published = terminal_event(output, native);
-                        assert_eq!(published["event"],"completed");
-                        assert_eq!(published["result"]["sent_output"],json!(sent.canonicalize().unwrap()));
-                        assert_eq!(published["result"]["recv_output"],json!(recv.canonicalize().unwrap()));
-                        assert_eq!(published["result"]["metadata_output"],json!(metadata.canonicalize().unwrap()));
-                        if sent == &private_sent { assert_eq!(published["result"]["secrets_output"],json!(private_secrets.canonicalize().unwrap())); }
                     }
-                    assert!(client.stderr.is_empty());
+                    assert_eq!(client.stderr.is_empty(), !matches!(case, Case::BrokenPipe));
                     assert!(verifier_errors.is_empty());
                 } else {
                     for output in [&client, &verifier] {
                         if native {
                             let event = terminal_event(&output.stdout, true);
                             assert_eq!(event["event"], "failed");
-                            assert!(!event.to_string().contains("SECRET"));
                             assert!(output.stderr.is_empty());
                         } else {
                             assert!(!output.stderr.is_empty());
@@ -383,7 +384,7 @@ async fn native_quic_attestation_binds_identity_session_and_disclosure() {
                     }
                     assert_eq!(
                         fs::read_dir(dir.path()).unwrap().count(),
-                        if collision { 6 } else { 5 },
+                        before,
                         "no partial output or temporary files"
                     );
                 }
@@ -419,17 +420,11 @@ async fn terminating_a_waiting_native_host_releases_its_port_without_temporary_f
                 "127.0.0.1:0",
                 "--server-name",
                 "localhost",
-                "--session",
-                "cancel",
             ])
             .arg("--cert")
             .arg(dir.path().join("verifier.pem"))
             .arg("--key")
             .arg(dir.path().join("verifier.key"))
-            .arg("--sent-output")
-            .arg(dir.path().join("verified-sent.txt"))
-            .arg("--recv-output")
-            .arg(dir.path().join("verified-recv.txt"))
             .arg("--metadata-output")
             .arg(dir.path().join("metadata.json"))
             .stdout(Stdio::piped())

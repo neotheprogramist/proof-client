@@ -1,5 +1,5 @@
 use crate::tls::{
-    attest::{self, AttestError, Report, Request},
+    attest::{self, AttestError, Opening, ProverOutput, ReportData, Request, VerifiedReport},
     disclosure::Disclosure,
 };
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -11,17 +11,13 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    str::FromStr,
     sync::Arc,
     time::Duration,
 };
 use tlsn::{connection::DnsName, webpki::RootCertStore};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
-pub const ALPN: &[u8] = b"proof-client-tlsn/5";
-// Policy: bound correlation metadata before allocating a cryptographic session.
-const MAX_SESSION_BYTES: usize = 128;
-const MAX_START_BYTES: usize = br#"{"session":""}"#.len() + MAX_SESSION_BYTES;
+pub const ALPN: &[u8] = b"proof-client-tlsn/7";
 // Policy: bound QUIC close draining.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -54,9 +50,7 @@ pub enum QuicError {
     Length(#[from] std::num::TryFromIntError),
     #[error("QUIC control frame exceeds its bound or is empty")]
     Frame,
-    #[error("session ID must contain 1..128 ASCII letters, digits, hyphens or underscores")]
-    Session,
-    #[error("QUIC session, target identity or verifier receipt does not match")]
+    #[error("target identity or verifier receipt does not match")]
     Mismatch,
     #[error("QUIC peer ended the protocol unexpectedly")]
     Closed,
@@ -73,49 +67,17 @@ impl std::fmt::Debug for QuicError {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct SessionId(String);
-impl TryFrom<String> for SessionId {
-    type Error = QuicError;
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        if value.is_empty()
-            || value.len() > MAX_SESSION_BYTES
-            || !value
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-        {
-            return Err(QuicError::Session);
-        }
-        Ok(Self(value))
-    }
-}
-impl FromStr for SessionId {
-    type Err = QuicError;
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        value.to_owned().try_into()
-    }
-}
-impl From<SessionId> for String {
-    fn from(value: SessionId) -> Self {
-        value.0
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Start {
-    session: SessionId,
-}
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 pub struct Receipt {
-    session: SessionId,
-    report: Report,
+    report: VerifiedReport,
+}
+#[derive(Serialize, Deserialize)]
+struct WireReceipt<T = ReportData> {
+    report: T,
 }
 
 #[derive(Serialize)]
 pub struct Metadata<'a> {
-    session: &'a SessionId,
     server_name: &'a str,
     sent_len: usize,
     received_len: usize,
@@ -124,18 +86,17 @@ pub struct Metadata<'a> {
 
 impl Receipt {
     pub fn metadata(&self) -> Metadata<'_> {
-        let (sent_len, received_len) = self.report.lengths();
+        let (sent_len, received_len) = self.report().lengths();
         Metadata {
-            session: &self.session,
-            server_name: self.report.server_name(),
+            server_name: self.report().server_name(),
             sent_len,
             received_len,
-            commitments: self.report.commitments(),
+            commitments: self.report().commitments(),
         }
     }
 
-    pub fn report(&self) -> &Report {
-        &self.report
+    pub fn report(&self) -> &ReportData {
+        self.report.data()
     }
 }
 
@@ -241,22 +202,37 @@ impl Drop for Channel {
     }
 }
 
-#[derive(Serialize)]
 pub struct Attestation {
-    transcript: tlsn::transcript::Transcript,
-    secrets: Vec<tlsn::transcript::TranscriptSecret>,
+    session: ProverOutput,
     receipt: Receipt,
 }
 
+#[derive(Serialize)]
+pub struct PrivateMetadata<'a> {
+    #[serde(flatten)]
+    metadata: Metadata<'a>,
+    openings: &'a [Opening],
+}
+
 impl Attestation {
+    pub fn response(&self) -> &[u8] {
+        self.session.response()
+    }
+    pub fn into_response(self) -> Vec<u8> {
+        self.session.response
+    }
+    pub fn metadata(&self) -> PrivateMetadata<'_> {
+        PrivateMetadata {
+            metadata: self.receipt.metadata(),
+            openings: self.session.openings(),
+        }
+    }
     pub fn transcript(&self) -> &tlsn::transcript::Transcript {
-        &self.transcript
+        self.session.transcript()
     }
-
-    pub fn secrets(&self) -> &[tlsn::transcript::TranscriptSecret] {
-        &self.secrets
+    pub fn openings(&self) -> &[Opening] {
+        self.session.openings()
     }
-
     pub fn receipt(&self) -> &Receipt {
         &self.receipt
     }
@@ -266,7 +242,6 @@ pub async fn attest(
     request: Request,
     disclosure: Disclosure,
     peer: Peer,
-    session: SessionId,
     target_roots: RootCertStore,
 ) -> Result<Attestation, QuicError> {
     let ip = match peer.address.ip() {
@@ -280,25 +255,19 @@ pub async fn attest(
             .await?;
         let connection = Channel(connection);
         let (send, recv) = connection.0.open_bi().await?;
-        let mut io = tokio::io::join(recv, send).compat();
-        Frame::encode(&Start {
-            session: session.clone(),
-        })?
-        .write(&mut io)
-        .await?;
+        let io = tokio::io::join(recv, send).compat();
         let server = tokio::net::TcpStream::connect(request.address())
             .await?
             .compat();
-        let (mut io, (report, transcript, secrets)) =
+        let (mut io, mut session) =
             attest::attest_session(request, disclosure, io, server, target_roots).await?;
-        let expected = Receipt {
-            session,
-            report: report.accepted(),
-        };
-        let encoded = Frame::encode(&expected)?;
+        session.report = session.report.accepted();
+        let encoded = Frame::encode(&WireReceipt {
+            report: &session.report,
+        })?;
         // PROOF: both peers encode the same transcript-derived receipt.
-        let receipt: Receipt = read_frame(&mut io, encoded.bytes.len()).await?;
-        if receipt.session != expected.session || receipt.report != expected.report {
+        let receipt: WireReceipt = read_frame(&mut io, encoded.bytes.len()).await?;
+        if receipt.report != session.report {
             return Err(QuicError::Mismatch);
         }
         expect_end(&mut io).await?;
@@ -308,47 +277,18 @@ pub async fn attest(
             error => return Err(error.into()),
         }
         Ok(Attestation {
-            transcript,
-            secrets,
-            receipt,
+            session,
+            receipt: Receipt {
+                report: VerifiedReport(receipt.report),
+            },
         })
     })
     .await;
     complete(&socket, result).await
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum ServeError<E: std::error::Error + 'static> {
-    #[error(transparent)]
-    Protocol(#[from] QuicError),
-    #[error("verified log publication failed: {0}")]
-    Publication(#[source] E),
-    #[error("serve failed and shutdown exceeded its deadline")]
-    Shutdown {
-        operation: Box<Self>,
-        shutdown: tokio::time::error::Elapsed,
-    },
-}
-
-impl<E: std::error::Error + 'static> From<std::io::Error> for ServeError<E> {
-    fn from(source: std::io::Error) -> Self {
-        Self::Protocol(source.into())
-    }
-}
-impl<E: std::error::Error + 'static> From<quinn::ConnectionError> for ServeError<E> {
-    fn from(source: quinn::ConnectionError) -> Self {
-        Self::Protocol(source.into())
-    }
-}
-impl<E: std::error::Error + 'static> From<AttestError> for ServeError<E> {
-    fn from(source: AttestError) -> Self {
-        Self::Protocol(source.into())
-    }
-}
-
 pub struct Verifier {
     socket: Endpoint,
-    session: SessionId,
     name: DnsName,
     roots: RootCertStore,
 }
@@ -356,7 +296,6 @@ impl Verifier {
     pub fn bind(
         address: SocketAddr,
         config: quinn::ServerConfig,
-        session: SessionId,
         server_name: &str,
         roots: RootCertStore,
     ) -> Result<Self, QuicError> {
@@ -366,7 +305,6 @@ impl Verifier {
         let name = DnsName::try_from(server_name)?;
         Ok(Self {
             socket: Endpoint::server(config, address)?,
-            session,
             name,
             roots,
         })
@@ -374,32 +312,19 @@ impl Verifier {
     pub fn local_addr(&self) -> Result<SocketAddr, QuicError> {
         Ok(self.socket.local_addr()?)
     }
-    pub async fn verify<E: std::error::Error + 'static>(
-        self,
-        publish: impl FnOnce(&Receipt) -> Result<(), E>,
-    ) -> Result<Receipt, ServeError<E>> {
+    pub async fn verify(self) -> Result<Receipt, QuicError> {
         let result = tokio::time::timeout(attest::SESSION_TIMEOUT, async {
             let incoming = self.socket.accept().await.ok_or(QuicError::Closed)?;
             self.socket.set_server_config(None);
             let connection = Channel(incoming.await?);
             let (send, recv) = connection.0.accept_bi().await?;
-            let mut io = tokio::io::join(recv, send).compat();
-            let start: Start = read_frame(&mut io, MAX_START_BYTES).await?;
-            if start.session != self.session {
-                return Err(QuicError::Mismatch.into());
-            }
+            let io = tokio::io::join(recv, send).compat();
             let (mut io, report) = attest::verify_session(io, self.roots).await?;
-            if report.server_name() != self.name.as_str() {
-                return Err(QuicError::Mismatch.into());
+            if report.data().server_name() != self.name.as_str() {
+                return Err(QuicError::Mismatch);
             }
-            let receipt = Receipt {
-                session: self.session,
-                report,
-            };
+            let receipt = Receipt { report };
             let frame = Frame::encode(&receipt)?;
-            if let Err(source) = publish(&receipt) {
-                return Err(ServeError::Publication(source));
-            }
             frame.write(&mut io).await?;
             io.close().await?;
             expect_end(&mut io).await?;
@@ -407,24 +332,7 @@ impl Verifier {
             Ok(receipt)
         })
         .await;
-        let result = match result {
-            Ok(result) => result,
-            Err(error) => Err(QuicError::Timeout(error).into()),
-        };
-        self.socket.close(
-            if result.is_ok() { 0u8 } else { 1u8 }.into(),
-            b"operation ended",
-        );
-        let drained = tokio::time::timeout(DRAIN_TIMEOUT, self.socket.wait_idle()).await;
-        match (result, drained) {
-            (Ok(receipt), Ok(())) => Ok(receipt),
-            (Err(error), Ok(())) => Err(error),
-            (Ok(_), Err(error)) => Err(QuicError::Timeout(error).into()),
-            (Err(operation), Err(shutdown)) => Err(ServeError::Shutdown {
-                operation: Box::new(operation),
-                shutdown,
-            }),
-        }
+        complete(&self.socket, result).await
     }
 }
 async fn expect_end(io: &mut (impl AsyncRead + Unpin)) -> Result<(), QuicError> {

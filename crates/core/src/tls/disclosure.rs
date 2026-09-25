@@ -13,6 +13,10 @@ const MAX_JSON_DEPTH: usize = 64;
 
 #[derive(thiserror::Error)]
 pub enum DisclosureError {
+    #[error("HTTP I/O failed: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("HTTP response exceeds the transcript budget")]
+    Limit,
     #[error("invalid or unsupported HTTP framing")]
     Http,
     #[error("invalid UTF-8 or JSON")]
@@ -163,10 +167,9 @@ fn check_depth(value: &serde_json::Value, depth: usize) -> Result<(), Disclosure
     }
     Ok(())
 }
-fn json_fields(
-    bytes: &[u8],
-    selections: &[&Pointer],
-) -> Result<Vec<Range<usize>>, DisclosureError> {
+type JsonFields = Vec<(Vec<String>, Range<usize>)>;
+
+fn json_fields(bytes: &[u8], selections: &[&Pointer]) -> Result<JsonFields, DisclosureError> {
     // Bound depth before PEG parsing.
     check_depth(&serde_json::from_slice::<serde_json::Value>(bytes)?, 0)?;
     let text = std::str::from_utf8(bytes)?;
@@ -196,10 +199,10 @@ fn visit(
     span: Range<usize>,
     path: &mut Vec<String>,
     pending: &mut HashSet<&[String]>,
-    fields: &mut Vec<Range<usize>>,
+    fields: &mut JsonFields,
 ) -> Result<(), DisclosureError> {
     if pending.remove(path.as_slice()) {
-        fields.push(span);
+        fields.push((path.clone(), span));
     }
     match pair.as_rule() {
         Rule::object => {
@@ -232,7 +235,8 @@ fn visit(
     Ok(())
 }
 
-struct Message {
+pub struct Message {
+    raw: Vec<u8>,
     start: Range<usize>,
     headers: Vec<(String, Range<usize>)>,
     body: Vec<u8>,
@@ -265,134 +269,322 @@ fn start_line(raw: &[u8], start: usize) -> Result<Range<usize>, DisclosureError>
     Ok(start..end + 2)
 }
 
-fn parse_http(raw: &[u8], direction: Direction<'_>) -> Result<Message, DisclosureError> {
-    let (start, offset, headers, no_body, framing_forbidden) = match direction {
-        Direction::Response(method) => {
-            let mut start = 0;
-            loop {
-                let line = start_line(raw, start)?;
-                let mut storage = [httparse::EMPTY_HEADER; MAX_HEADERS];
-                let mut parsed = httparse::Response::new(&mut storage);
-                let offset = start
-                    + complete(parsed.parse(raw.get(start..).ok_or(DisclosureError::Http)?)?)?;
-                let status = parsed.code.ok_or(DisclosureError::Http)?;
-                if status == 101
-                    || (*method == http::Method::CONNECT && (200..300).contains(&status))
-                {
-                    return Err(DisclosureError::Http);
-                }
-                if (100..200).contains(&status) {
-                    if parsed.headers.iter().any(|header| {
-                        header.name.eq_ignore_ascii_case("content-length")
-                            || header.name.eq_ignore_ascii_case("transfer-encoding")
-                    }) {
+#[derive(Clone, Copy)]
+struct Lines {
+    start: usize,
+    scan: usize,
+}
+impl Lines {
+    fn new(start: usize) -> Self {
+        Self { start, scan: start }
+    }
+    fn next(&mut self, raw: &[u8]) -> Option<Range<usize>> {
+        let tail = raw.get(self.scan..)?;
+        let newline = tail.iter().position(|byte| *byte == b'\n');
+        self.scan += newline.map_or(tail.len(), |index| index + 1);
+        newline.map(|_| {
+            let line = self.start..self.scan;
+            self.start = self.scan;
+            line
+        })
+    }
+    fn end(&mut self, raw: &[u8]) -> Option<usize> {
+        while let Some(line) = self.next(raw) {
+            if matches!(raw.get(line.clone()), Some(b"\r\n" | b"\n")) {
+                return Some(line.end);
+            }
+        }
+        None
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Phase {
+    Headers {
+        start: usize,
+        lines: Lines,
+    },
+    Fixed {
+        start: usize,
+        end: usize,
+    },
+    UntilEof {
+        start: usize,
+    },
+    ChunkSize(Lines),
+    Chunk {
+        start: usize,
+        end: usize,
+        after: usize,
+    },
+    Trailers {
+        start: usize,
+        lines: Lines,
+    },
+    Complete(usize),
+}
+struct Decoder {
+    phase: Phase,
+    start: Range<usize>,
+    headers: Vec<(String, Range<usize>)>,
+    body: Vec<u8>,
+    chunks: Vec<(Range<usize>, Range<usize>)>,
+}
+impl Decoder {
+    fn new() -> Self {
+        Self {
+            phase: Phase::Headers {
+                start: 0,
+                lines: Lines::new(0),
+            },
+            start: 0..0,
+            headers: Vec::new(),
+            body: Vec::new(),
+            chunks: Vec::new(),
+        }
+    }
+    fn payload(&mut self, raw: &[u8], wire: Range<usize>) -> Result<(), DisclosureError> {
+        let payload = raw.get(wire.clone()).ok_or(DisclosureError::Http)?;
+        self.chunks
+            .push((self.body.len()..self.body.len() + payload.len(), wire));
+        self.body.extend_from_slice(payload);
+        Ok(())
+    }
+    fn advance(
+        &mut self,
+        raw: &[u8],
+        direction: &Direction<'_>,
+        eof: bool,
+    ) -> Result<Option<usize>, DisclosureError> {
+        loop {
+            self.phase = match self.phase {
+                Phase::Headers { start, mut lines } => {
+                    let Some(end) = lines.end(raw) else {
+                        self.phase = Phase::Headers { start, lines };
+                        break;
+                    };
+                    let input = raw.get(start..end).ok_or(DisclosureError::Http)?;
+                    let mut storage = [httparse::EMPTY_HEADER; MAX_HEADERS];
+                    let (headers, no_body, forbidden, interim) = match direction {
+                        Direction::Response(method) => {
+                            let mut parsed = httparse::Response::new(&mut storage);
+                            if parsed.parse(input)? != httparse::Status::Complete(input.len()) {
+                                return Err(DisclosureError::Http);
+                            }
+                            let status = parsed.code.ok_or(DisclosureError::Http)?;
+                            if status == 101
+                                || (**method == http::Method::CONNECT
+                                    && (200..300).contains(&status))
+                            {
+                                return Err(DisclosureError::Http);
+                            }
+                            (
+                                parsed.headers,
+                                **method == http::Method::HEAD || matches!(status, 204 | 304),
+                                status == 204 || (100..200).contains(&status),
+                                (100..200).contains(&status),
+                            )
+                        }
+                        Direction::Request => {
+                            let mut parsed = httparse::Request::new(&mut storage);
+                            if parsed.parse(input)? != httparse::Status::Complete(input.len()) {
+                                return Err(DisclosureError::Http);
+                            }
+                            (parsed.headers, false, false, false)
+                        }
+                    };
+                    self.start = start_line(raw, start)?;
+                    self.headers.clear();
+                    let mut length = None;
+                    let mut chunked = false;
+                    for header in headers {
+                        let name = header.name.to_ascii_lowercase();
+                        self.headers.push((
+                            name.clone(),
+                            range_in(raw, header.name.as_bytes()).start
+                                ..range_in(raw, header.value).end,
+                        ));
+                        match name.as_str() {
+                            "content-length" => {
+                                if forbidden
+                                    || length.is_some()
+                                    || header.value.is_empty()
+                                    || !header.value.iter().all(u8::is_ascii_digit)
+                                {
+                                    return Err(DisclosureError::Http);
+                                }
+                                length = Some(std::str::from_utf8(header.value)?.parse::<usize>()?);
+                            }
+                            "transfer-encoding" => {
+                                if forbidden
+                                    || chunked
+                                    || !header.value.eq_ignore_ascii_case(b"chunked")
+                                {
+                                    return Err(DisclosureError::Http);
+                                }
+                                chunked = true;
+                            }
+                            "content-encoding"
+                                if !no_body
+                                    && !interim
+                                    && !header.value.eq_ignore_ascii_case(b"identity") =>
+                            {
+                                return Err(DisclosureError::Http);
+                            }
+                            _ => {}
+                        }
+                    }
+                    if chunked && length.is_some() {
                         return Err(DisclosureError::Http);
                     }
-                    start = offset;
-                    continue;
+                    if interim {
+                        Phase::Headers {
+                            start: end,
+                            lines: Lines::new(end),
+                        }
+                    } else if no_body {
+                        Phase::Complete(end)
+                    } else if chunked {
+                        Phase::ChunkSize(Lines::new(end))
+                    } else if let Some(length) = length {
+                        Phase::Fixed {
+                            start: end,
+                            end: end.checked_add(length).ok_or(DisclosureError::Http)?,
+                        }
+                    } else {
+                        Phase::UntilEof { start: end }
+                    }
                 }
-                break (
-                    line,
-                    offset,
-                    parsed.headers.to_vec(),
-                    *method == http::Method::HEAD || matches!(status, 204 | 304),
-                    status == 204,
-                );
-            }
+                Phase::Fixed { start, end } => {
+                    if raw.len() < end {
+                        break;
+                    }
+                    self.payload(raw, start..end)?;
+                    Phase::Complete(end)
+                }
+                Phase::UntilEof { start } => {
+                    if !eof {
+                        break;
+                    }
+                    self.payload(raw, start..raw.len())?;
+                    Phase::Complete(raw.len())
+                }
+                Phase::ChunkSize(mut lines) => {
+                    let Some(line) = lines.next(raw) else {
+                        self.phase = Phase::ChunkSize(lines);
+                        break;
+                    };
+                    let input = raw.get(line.clone()).ok_or(DisclosureError::Http)?;
+                    let httparse::Status::Complete((used, count)) =
+                        httparse::parse_chunk_size(input)?
+                    else {
+                        return Err(DisclosureError::Http);
+                    };
+                    if used != input.len() {
+                        return Err(DisclosureError::Http);
+                    }
+                    let count = usize::try_from(count)?;
+                    if count == 0 {
+                        Phase::Trailers {
+                            start: line.end,
+                            lines: Lines::new(line.end),
+                        }
+                    } else {
+                        let end = line.end.checked_add(count).ok_or(DisclosureError::Http)?;
+                        Phase::Chunk {
+                            start: line.end,
+                            end,
+                            after: end.checked_add(2).ok_or(DisclosureError::Http)?,
+                        }
+                    }
+                }
+                Phase::Chunk { start, end, after } => {
+                    if raw.len() < after {
+                        break;
+                    }
+                    if raw.get(end..after) != Some(b"\r\n") {
+                        return Err(DisclosureError::Http);
+                    }
+                    self.payload(raw, start..end)?;
+                    Phase::ChunkSize(Lines::new(after))
+                }
+                Phase::Trailers { start, mut lines } => {
+                    let Some(end) = lines.end(raw) else {
+                        self.phase = Phase::Trailers { start, lines };
+                        break;
+                    };
+                    let mut storage = [httparse::EMPTY_HEADER; MAX_HEADERS];
+                    let input = raw.get(start..end).ok_or(DisclosureError::Http)?;
+                    let httparse::Status::Complete((used, _)) =
+                        httparse::parse_headers(input, &mut storage)?
+                    else {
+                        return Err(DisclosureError::Http);
+                    };
+                    if used != input.len() {
+                        return Err(DisclosureError::Http);
+                    }
+                    Phase::Complete(end)
+                }
+                Phase::Complete(end) => return Ok(Some(end)),
+            };
         }
-        Direction::Request => {
-            let mut storage = [httparse::EMPTY_HEADER; MAX_HEADERS];
-            let mut parsed = httparse::Request::new(&mut storage);
-            let offset = complete(parsed.parse(raw)?)?;
-            (
-                start_line(raw, 0)?,
-                offset,
-                parsed.headers.to_vec(),
-                false,
-                false,
-            )
-        }
-    };
-    let mut ranges = Vec::new();
-    let mut length = None;
-    let mut chunked = false;
-    for header in headers.iter() {
-        let name = header.name.to_ascii_lowercase();
-        let start = range_in(raw, header.name.as_bytes()).start;
-        let end = range_in(raw, header.value).end;
-        ranges.push((name.clone(), start..end));
-        match name.as_str() {
-            "content-length" => {
-                if framing_forbidden
-                    || length.is_some()
-                    || header.value.is_empty()
-                    || !header.value.iter().all(u8::is_ascii_digit)
-                {
-                    return Err(DisclosureError::Http);
-                }
-                length = Some(std::str::from_utf8(header.value)?.parse::<usize>()?);
-            }
-            "transfer-encoding" => {
-                if framing_forbidden || chunked || !header.value.eq_ignore_ascii_case(b"chunked") {
-                    return Err(DisclosureError::Http);
-                }
-                chunked = true;
-            }
-            "content-encoding" if !no_body && !header.value.eq_ignore_ascii_case(b"identity") => {
-                return Err(DisclosureError::Http);
-            }
-            _ => {}
+        if eof {
+            Err(DisclosureError::Http)
+        } else {
+            Ok(None)
         }
     }
-    if chunked && length.is_some() {
+    fn finish(self, mut raw: Vec<u8>, end: usize) -> Message {
+        raw.truncate(end);
+        Message {
+            raw,
+            start: self.start,
+            headers: self.headers,
+            body: self.body,
+            chunks: self.chunks,
+        }
+    }
+}
+
+fn parse_http(raw: &[u8], direction: Direction<'_>) -> Result<Message, DisclosureError> {
+    let mut decoder = Decoder::new();
+    let end = decoder
+        .advance(raw, &direction, true)?
+        .ok_or(DisclosureError::Http)?;
+    if end != raw.len() {
         return Err(DisclosureError::Http);
     }
-    let mut body = Vec::new();
-    let mut chunks = Vec::new();
-    if no_body {
-        if offset != raw.len() {
-            return Err(DisclosureError::Http);
-        }
-    } else if chunked {
-        let mut position = offset;
-        loop {
-            let remaining = raw.get(position..).ok_or(DisclosureError::Http)?;
-            let (prefix, count) = complete(httparse::parse_chunk_size(remaining)?)?;
-            let count = usize::try_from(count)?;
-            position = position.checked_add(prefix).ok_or(DisclosureError::Http)?;
-            if count == 0 {
-                let mut trailers = [httparse::EMPTY_HEADER; MAX_HEADERS];
-                let remaining = raw.get(position..).ok_or(DisclosureError::Http)?;
-                let (used, _) = complete(httparse::parse_headers(remaining, &mut trailers)?)?;
-                if position + used != raw.len() {
-                    return Err(DisclosureError::Http);
-                }
-                break;
+    Ok(decoder.finish(raw.to_vec(), end))
+}
+
+pub async fn receive(
+    reader: &mut (impl futures::AsyncRead + Unpin),
+    method: &http::Method,
+    limit: usize,
+) -> Result<Message, DisclosureError> {
+    use futures::AsyncReadExt;
+    let capacity = limit.checked_add(1).ok_or(DisclosureError::Limit)?;
+    let mut raw = Vec::new();
+    let mut decoder = Decoder::new();
+    // Policy: batch reads in a bounded stack buffer.
+    const BUFFER_BYTES: usize = 4096;
+    let mut buffer = [0; BUFFER_BYTES];
+    loop {
+        let remaining = buffer.len().min(capacity - raw.len());
+        let read = reader
+            .read(buffer.get_mut(..remaining).ok_or(DisclosureError::Http)?)
+            .await?;
+        raw.extend_from_slice(buffer.get(..read).ok_or(DisclosureError::Http)?);
+        if let Some(end) = decoder.advance(&raw, &Direction::Response(method), read == 0)? {
+            if end > limit {
+                return Err(DisclosureError::Limit);
             }
-            let end = position.checked_add(count).ok_or(DisclosureError::Http)?;
-            let payload = raw.get(position..end).ok_or(DisclosureError::Http)?;
-            let after = end.checked_add(2).ok_or(DisclosureError::Http)?;
-            if raw.get(end..after) != Some(b"\r\n") {
-                return Err(DisclosureError::Http);
-            }
-            chunks.push((body.len()..body.len() + count, position..end));
-            body.extend_from_slice(payload);
-            position = after;
+            return Ok(decoder.finish(raw, end));
         }
-    } else {
-        let payload = raw.get(offset..).ok_or(DisclosureError::Http)?;
-        if length.is_some_and(|length| length != payload.len()) {
-            return Err(DisclosureError::Http);
+        if raw.len() > limit {
+            return Err(DisclosureError::Limit);
         }
-        body.extend_from_slice(payload);
-        chunks.push((0..payload.len(), offset..raw.len()));
     }
-    Ok(Message {
-        start,
-        headers: ranges,
-        body,
-        chunks,
-    })
 }
 
 pub fn select(
@@ -400,36 +592,74 @@ pub fn select(
     direction: Direction<'_>,
     config: &MessageDisclosure,
 ) -> Result<RangeSet<usize>, DisclosureError> {
-    let config = &config.0;
-    let mut ranges = Vec::new();
-    for selection in config {
-        if let Selection::Bytes(range) = selection {
-            if raw.get(range.clone()).is_none() {
-                return Err(DisclosureError::Selector);
-            }
-            ranges.push(range.clone());
-        }
-    }
-    if config
+    Ok(resolve(raw, direction, config, &MessageDisclosure::default())?.0)
+}
+
+pub fn resolve(
+    raw: &[u8],
+    direction: Direction<'_>,
+    reveal: &MessageDisclosure,
+    commit: &MessageDisclosure,
+) -> Result<(RangeSet<usize>, RangeSet<usize>), DisclosureError> {
+    let structured = reveal
+        .0
         .iter()
-        .any(|selection| !matches!(selection, Selection::Bytes(_)))
-    {
-        let message = parse_http(raw, direction)?;
-        let pointers = config
-            .iter()
-            .filter_map(|selection| match selection {
-                Selection::Json(pointer) => Some(pointer),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let fields = if pointers.is_empty() {
-            Vec::new()
-        } else {
-            json_fields(&message.body, &pointers)?
-        };
-        for selection in config {
+        .chain(&commit.0)
+        .any(|s| !matches!(s, Selection::Bytes(_)));
+    let message = if structured {
+        Some(parse_http(raw, direction)?)
+    } else {
+        None
+    };
+    resolve_selections(raw, message.as_ref(), reveal, commit)
+}
+
+impl Message {
+    pub fn into_body(self) -> Vec<u8> {
+        self.body
+    }
+
+    pub fn resolve(
+        &self,
+        reveal: &MessageDisclosure,
+        commit: &MessageDisclosure,
+    ) -> Result<(RangeSet<usize>, RangeSet<usize>), DisclosureError> {
+        resolve_selections(&self.raw, Some(self), reveal, commit)
+    }
+}
+
+fn resolve_selections(
+    raw: &[u8],
+    message: Option<&Message>,
+    reveal: &MessageDisclosure,
+    commit: &MessageDisclosure,
+) -> Result<(RangeSet<usize>, RangeSet<usize>), DisclosureError> {
+    use tlsn::rangeset::ops::Set;
+    let pointers = reveal
+        .0
+        .iter()
+        .chain(&commit.0)
+        .filter_map(|s| match s {
+            Selection::Json(pointer) => Some(pointer),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let fields = if pointers.is_empty() {
+        Vec::new()
+    } else {
+        json_fields(&message.ok_or(DisclosureError::Http)?.body, &pointers)?
+    };
+    let select = |config: &MessageDisclosure| -> Result<RangeSet<usize>, DisclosureError> {
+        let mut ranges = Vec::new();
+        for selection in &config.0 {
+            if let Selection::Bytes(range) = selection {
+                raw.get(range.clone()).ok_or(DisclosureError::Selector)?;
+                ranges.push(range.clone());
+                continue;
+            }
+            let message = message.ok_or(DisclosureError::Http)?;
             match selection {
-                Selection::Bytes(_) | Selection::Json(_) => {}
+                Selection::Bytes(_) => {}
                 Selection::StartLine => ranges.push(message.start.clone()),
                 Selection::Header(name) => {
                     let mut matched = message
@@ -449,26 +679,31 @@ pub fn select(
                         .chunks
                         .iter()
                         .map(|(_, wire)| wire.clone())
-                        .filter(|range| !range.is_empty()),
+                        .filter(|r| !r.is_empty()),
                 ),
-            }
-        }
-        for field in fields {
-            for (body, wire) in &message.chunks {
-                let start = body.start.max(field.start);
-                let end = body.end.min(field.end);
-                if start < end {
-                    ranges.push(wire.start + start - body.start..wire.start + end - body.start);
+                Selection::Json(pointer) => {
+                    let (_, field) = fields
+                        .iter()
+                        .find(|(path, _)| *path == pointer.0)
+                        .ok_or(DisclosureError::Selector)?;
+                    for (body, wire) in &message.chunks {
+                        let start = body.start.max(field.start);
+                        let end = body.end.min(field.end);
+                        if start < end {
+                            ranges.push(
+                                wire.start + start - body.start..wire.start + end - body.start,
+                            );
+                        }
+                    }
                 }
             }
         }
+        Ok(RangeSet::from(ranges))
+    };
+    let revealed = select(reveal)?;
+    let committed = select(commit)?;
+    if !revealed.is_disjoint(&committed) {
+        return Err(DisclosureError::Ambiguous);
     }
-    Ok(RangeSet::from(ranges))
-}
-
-fn complete<T>(status: httparse::Status<T>) -> Result<T, DisclosureError> {
-    match status {
-        httparse::Status::Complete(value) => Ok(value),
-        httparse::Status::Partial => Err(DisclosureError::Http),
-    }
+    Ok((revealed, committed))
 }

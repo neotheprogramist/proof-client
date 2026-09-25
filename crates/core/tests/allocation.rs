@@ -91,3 +91,56 @@ fn unused_ancestor_allocation_scales_with_input_not_descendant_paths() {
         "allocation {allocation}, baseline {baseline}"
     );
 }
+
+#[test]
+fn fragmented_chunks_allocate_linearly() {
+    use futures::{AsyncRead, executor::block_on};
+    use proof_client_core::tls::disclosure::receive;
+    struct Bytes<'a>(&'a [u8]);
+    impl AsyncRead for Bytes<'_> {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            out: &mut [u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            let n = usize::from(!self.0.is_empty()).min(out.len());
+            out[..n].copy_from_slice(&self.0[..n]);
+            self.0 = &self.0[n..];
+            std::task::Poll::Ready(Ok(n))
+        }
+    }
+    let input = |chunks| {
+        format!(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{}0\r\n\r\n",
+            "1\r\nx\r\n".repeat(chunks)
+        )
+        .into_bytes()
+    };
+    let small = input(128);
+    let large = input(512);
+    let run = |raw: &[u8]| {
+        block_on(receive(&mut Bytes(raw), &http::Method::GET, raw.len()))
+            .unwrap()
+            .into_body()
+    };
+    let (a, baseline) = measured(|| run(&small));
+    let (b, allocation) = measured(|| run(&large));
+    assert_eq!(a, vec![b'x'; 128]);
+    assert_eq!(b, vec![b'x'; 512]);
+    // Policy: allow twice proportional input growth for allocation capacity boundaries.
+    let within = |bytes: usize| {
+        (bytes as u128) * (small.len() as u128) <= 2 * (baseline as u128) * (large.len() as u128)
+    };
+    let (_, linear) = measured(|| std::hint::black_box(large.clone()));
+    let (_, quadratic) = measured(|| {
+        for end in 0..large.len() {
+            std::hint::black_box(large[..end].to_vec());
+        }
+    });
+    assert!(within(linear));
+    assert!(!within(quadratic));
+    assert!(
+        within(allocation),
+        "allocation {allocation}, baseline {baseline}"
+    );
+}

@@ -6,13 +6,12 @@ fn certificate() -> rcgen::CertifiedKey<rcgen::KeyPair> {
 }
 
 #[tokio::test]
-async fn cancelling_a_connecting_verifier_closes_the_peer_without_publication() {
+async fn cancelling_a_connecting_verifier_closes_the_peer_without_completion() {
     let cert = certificate();
     let pem = cert.cert.pem();
     let verifier = Verifier::bind(
         "127.0.0.1:0".parse().unwrap(),
         server_config(pem.as_bytes(), cert.signing_key.serialize_pem().as_bytes()).unwrap(),
-        "test".parse().unwrap(),
         "localhost",
         roots(None).unwrap(),
     )
@@ -24,12 +23,8 @@ async fn cancelling_a_connecting_verifier_closes_the_peer_without_publication() 
     )
     .unwrap();
     let endpoint = Endpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
-    let mut published = false;
     let connection = {
-        let operation = verifier.verify(|_| {
-            published = true;
-            Ok::<_, std::io::Error>(())
-        });
+        let operation = verifier.verify();
         let connected = endpoint
             .connect_with(peer.config, peer.address, peer.name.as_str())
             .unwrap();
@@ -46,7 +41,6 @@ async fn cancelling_a_connecting_verifier_closes_the_peer_without_publication() 
         drop(operation);
         connection
     };
-    assert!(!published);
     let closed = tokio::time::timeout(Duration::from_secs(5), connection.closed())
         .await
         .unwrap();
@@ -69,73 +63,29 @@ async fn idle_verifier_deadline_includes_waiting_for_a_connection() {
             cert.signing_key.serialize_pem().as_bytes(),
         )
         .unwrap(),
-        "test".parse().unwrap(),
         "localhost",
         roots(None).unwrap(),
     )
     .unwrap();
     let start = tokio::time::Instant::now();
     assert!(matches!(
-        verifier.verify(|_| Ok::<_, std::io::Error>(())).await,
-        Err(ServeError::Protocol(QuicError::Timeout(_)))
+        verifier.verify().await,
+        Err(QuicError::Timeout(_))
     ));
     assert_eq!(start.elapsed(), attest::SESSION_TIMEOUT);
 }
 
 #[tokio::test]
-async fn quic_admission_rejects_truncation_oversize_and_invalid_context() {
-    let cert = certificate();
-    let cert_pem = cert.cert.pem();
-    let key = cert.signing_key.serialize_pem();
-    let invalid = br#"{"session":"test","extra":true}"#;
-    let mut invalid_frame = (invalid.len() as u32).to_be_bytes().to_vec();
-    invalid_frame.extend_from_slice(invalid);
-    for frame in [
+async fn receipt_framing_rejects_truncated_and_invalid_payloads() {
+    for bytes in [
         Vec::new(),
         vec![0, 0],
-        u32::MAX.to_be_bytes().to_vec(),
         vec![0, 0, 0, 10, b'{'],
-        invalid_frame,
+        vec![0, 0, 0, 1, b'{'],
     ] {
-        let verifier = Verifier::bind(
-            "127.0.0.1:0".parse().unwrap(),
-            server_config(cert_pem.as_bytes(), key.as_bytes()).unwrap(),
-            "test".parse().unwrap(),
-            "localhost",
-            roots(None).unwrap(),
-        )
-        .unwrap();
-        let peer = Peer::new(
-            verifier.local_addr().unwrap(),
-            "localhost",
-            roots(Some(cert_pem.as_bytes())).unwrap(),
-        )
-        .unwrap();
-        let endpoint = Endpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
-        let rejected = async {
-            let connection = endpoint
-                .connect_with(peer.config, peer.address, peer.name.as_str())
-                .unwrap()
-                .await
-                .unwrap();
-            let (mut send, _recv) = connection.open_bi().await.unwrap();
-            send.write_all(&frame).await.unwrap();
-            send.finish().unwrap();
-            assert!(
-                matches!(connection.closed().await, quinn::ConnectionError::ApplicationClosed(close) if close.error_code == 1u8.into())
-            );
-            endpoint.wait_idle().await;
-        };
-        let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::join!(verifier.verify(|_| Ok::<_, std::io::Error>(())), rejected)
-        })
-        .await
-        .unwrap();
         assert!(matches!(
-            result,
-            Err(ServeError::Protocol(
-                QuicError::Io(_) | QuicError::Frame | QuicError::Json(_)
-            ))
+            read_frame::<WireReceipt>(&mut futures::io::Cursor::new(bytes), 10).await,
+            Err(QuicError::Io(_) | QuicError::Json(_))
         ));
     }
 }
@@ -157,7 +107,6 @@ async fn verifier_topology_rejects_non_loopback_before_binding() {
                     cert.signing_key.serialize_pem().as_bytes()
                 )
                 .unwrap(),
-                "manual".parse().unwrap(),
                 "localhost",
                 roots(None).unwrap()
             ),
@@ -175,7 +124,7 @@ async fn fragmented_receipt_fits_the_transcript_budget() {
             .map(|start| json!({"start":start,"bytes":[255]}))
             .collect::<Vec<_>>()
     };
-    let receipt: Receipt = serde_json::from_value(json!({"session":"x".repeat(MAX_SESSION_BYTES),"report":{
+    let receipt: WireReceipt = serde_json::from_value(json!({"report":{
         "kind":"live-verifier-accepted","server_name":"localhost","sent_len":attest::MAX_SENT,"received_len":attest::MAX_RECEIVED,
         "sent":segments(attest::MAX_SENT),"received":segments(attest::MAX_RECEIVED),"commitments":[]
     }})).unwrap();
@@ -188,7 +137,7 @@ async fn fragmented_receipt_fits_the_transcript_budget() {
     assert!(io.get_ref().len() > 1024 * 1024);
     io.set_position(0);
     let limit = serde_json::to_vec(&receipt).unwrap().len();
-    let received: Receipt = read_frame(&mut io, limit).await.unwrap();
+    let received: WireReceipt = read_frame(&mut io, limit).await.unwrap();
     assert_eq!(
         serde_json::to_value(received).unwrap(),
         serde_json::to_value(receipt).unwrap()
@@ -210,43 +159,20 @@ async fn control_frame_limits_are_enforced_before_payload_io() {
             Pin::new(&mut self.0).poll_read(cx, bytes)
         }
     }
-    let start = Start {
-        session: "x".repeat(MAX_SESSION_BYTES).parse().unwrap(),
-    };
-    let admitted = serde_json::to_vec(&start).unwrap().len();
+    let admitted = 10;
     for size in [0, admitted + 1, u32::MAX as usize] {
         assert!(matches!(
-            read_frame::<Start>(
+            read_frame::<WireReceipt>(
                 &mut Prefix(futures::io::Cursor::new(
                     (size as u32).to_be_bytes().to_vec()
                 )),
-                MAX_START_BYTES
+                admitted
             )
             .await,
             Err(QuicError::Frame)
         ));
     }
 }
-#[test]
-fn session_admission_enumerates_the_allowed_alphabet_and_length_edges() {
-    let alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
-    for byte in 0u8..=255 {
-        let value = format!("x{}", char::from(byte));
-        assert_eq!(
-            value.parse::<SessionId>().is_ok(),
-            alphabet.contains(char::from(byte))
-        );
-    }
-    for (length, accepted) in [
-        (0, false),
-        (1, true),
-        (MAX_SESSION_BYTES, true),
-        (MAX_SESSION_BYTES + 1, false),
-    ] {
-        assert_eq!("x".repeat(length).parse::<SessionId>().is_ok(), accepted);
-    }
-}
-
 #[path = "../../../../examples/mbank/support/fixture.rs"]
 mod fixture;
 #[tokio::test]
@@ -255,7 +181,6 @@ async fn attester_rejects_each_changed_acknowledgement_field() {
     use std::fs;
     for changed in [
         None,
-        Some(("/session", json!("evil"))),
         Some(("/report/kind", json!("prover-disclosure"))),
         Some(("/report/server_name", json!("localhosx"))),
         Some(("/report/sent_len", json!(0))),
@@ -286,22 +211,26 @@ async fn attester_rejects_each_changed_acknowledgement_field() {
             roots(Some(&cert)).unwrap(),
         )
         .unwrap();
-        let request=Request::parse(&serde_json::to_vec(&json!({"method":"GET","url":format!("https://localhost:{}/balance",target.address().unwrap().port()),"headers":[],"body_base64":""})).unwrap()).unwrap();
+        let request = Request::new(
+            &format!(
+                "https://localhost:{}/balance",
+                target.address().unwrap().port()
+            ),
+            http::Method::GET,
+            vec![],
+            vec![],
+        )
+        .unwrap();
         let disclosure =
             Disclosure::parse(br#"{"sent":[{"bytes":[0,1]}],"received":["body"],"commit":{"sent":[{"bytes":[1,2]}],"received":[]}}"#).unwrap();
         let verifier = async {
             let connection = endpoint.accept().await.unwrap().await.unwrap();
             let (send, recv) = connection.accept_bi().await.unwrap();
-            let mut io = tokio::io::join(recv, send).compat();
-            let start: Start = read_frame(&mut io, MAX_START_BYTES).await.unwrap();
+            let io = tokio::io::join(recv, send).compat();
             let (mut io, report) = attest::verify_session(io, roots(Some(&target_ca)).unwrap())
                 .await
                 .unwrap();
-            let mut receipt = serde_json::to_value(Receipt {
-                session: start.session,
-                report,
-            })
-            .unwrap();
+            let mut receipt = serde_json::to_value(Receipt { report }).unwrap();
             if let Some((path, value)) = &changed {
                 *receipt.pointer_mut(path).unwrap() = value.clone();
             }
@@ -324,13 +253,7 @@ async fn attester_rejects_each_changed_acknowledgement_field() {
             tokio::join!(
                 verifier,
                 target.serve(&response),
-                attest(
-                    request,
-                    disclosure,
-                    peer,
-                    "test".parse().unwrap(),
-                    roots(Some(&target_ca)).unwrap()
-                )
+                attest(request, disclosure, peer, roots(Some(&target_ca)).unwrap())
             )
         })
         .await
@@ -349,39 +272,37 @@ async fn attester_rejects_each_changed_acknowledgement_field() {
 }
 
 #[tokio::test]
-async fn cancelling_active_mpc_closes_target_and_verifier_without_publication() {
-    use serde_json::json;
+async fn cancelling_active_mpc_closes_target_and_verifier_without_completion() {
     use tokio::io::AsyncReadExt;
 
-    tokio::time::timeout(Duration::from_secs(10), async {
+    tokio::time::timeout(attest::SESSION_TIMEOUT, async {
         let target = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let cert = certificate();
         let pem = cert.cert.pem();
         let verifier = Verifier::bind(
             "127.0.0.1:0".parse().unwrap(),
             server_config(pem.as_bytes(), cert.signing_key.serialize_pem().as_bytes()).unwrap(),
-            "cancel".parse().unwrap(),
             "localhost",
             roots(None).unwrap(),
         )
         .unwrap();
         let address = verifier.local_addr().unwrap();
         let peer = Peer::new(address, "localhost", roots(Some(pem.as_bytes())).unwrap()).unwrap();
-        let request = Request::parse(
-            &serde_json::to_vec(&json!({
-                "url":format!("https://localhost:{}/balance",target.local_addr().unwrap().port()),
-                "method":"GET","headers":[],"body_base64":""
-            }))
-            .unwrap(),
+        let request = Request::new(
+            &format!(
+                "https://localhost:{}/balance",
+                target.local_addr().unwrap().port()
+            ),
+            http::Method::GET,
+            vec![],
+            vec![],
         )
         .unwrap();
-        let mut published = false;
         let client = async {
             let operation = Box::pin(attest(
                 request,
                 Disclosure::parse(br#"{"sent":[],"received":[]}"#).unwrap(),
                 peer,
-                "cancel".parse().unwrap(),
                 roots(None).unwrap(),
             ));
             let hello = Box::pin(async {
@@ -398,16 +319,52 @@ async fn cancelling_active_mpc_closes_target_and_verifier_without_publication() 
             let mut remaining = Vec::new();
             socket.read_to_end(&mut remaining).await.unwrap();
         };
-        let ((), result) = tokio::join!(
-            client,
-            verifier.verify(|_| {
-                published = true;
-                Ok::<_, std::io::Error>(())
-            })
-        );
+        let ((), result) = tokio::join!(client, verifier.verify());
         assert!(result.is_err());
-        assert!(!published);
     })
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn cancellation_after_receipt_never_signals_success() {
+    tokio::time::timeout(attest::SESSION_TIMEOUT, async {
+        let dir = tempfile::tempdir().unwrap();
+        let target = fixture::Fixture::bind(dir.path(), "127.0.0.1:0".parse().unwrap()).await.unwrap();
+        let cert = std::fs::read(dir.path().join("verifier.pem")).unwrap();
+        let key = std::fs::read(dir.path().join("verifier.key")).unwrap();
+        let ca = std::fs::read(dir.path().join("target.pem")).unwrap();
+        let verifier = Verifier::bind("127.0.0.1:0".parse().unwrap(), server_config(&cert, &key).unwrap(), "localhost", roots(Some(&ca)).unwrap()).unwrap();
+        let peer = Peer::new(verifier.local_addr().unwrap(), "localhost", roots(Some(&cert)).unwrap()).unwrap();
+        let endpoint = Endpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
+        let request = Request::new(&format!("https://localhost:{}/balance", target.address().unwrap().port()), http::Method::GET, vec![], vec![]).unwrap();
+        let (cancel, cancelled) = futures::channel::oneshot::channel();
+        let server = async {
+            let futures::future::Either::Right((Ok(()), operation)) =
+                futures::future::select(Box::pin(verifier.verify()), cancelled).await
+            else {
+                unreachable!("verifier must wait for client completion")
+            };
+            drop(operation);
+        };
+        let client = async {
+            let connection = endpoint.connect_with(peer.config, peer.address, peer.name.as_str()).unwrap().await.unwrap();
+            let (send, recv) = connection.open_bi().await.unwrap();
+            let io = tokio::io::join(recv, send).compat();
+            let target = tokio::net::TcpStream::connect(request.address()).await.unwrap().compat();
+            let (mut io, session) = attest::attest_session(request, Disclosure::parse(br#"{"sent":[],"received":["body"]}"#).unwrap(), io, target, roots(Some(&ca)).unwrap()).await.unwrap();
+            let expected = WireReceipt { report: session.report.accepted() };
+            let receipt: WireReceipt = read_frame(&mut io, Frame::encode(&expected).unwrap().bytes.len()).await.unwrap();
+            assert_eq!(receipt.report, expected.report);
+            expect_end(&mut io).await.unwrap();
+            cancel.send(()).unwrap();
+            assert!(matches!(connection.closed().await, quinn::ConnectionError::ApplicationClosed(close) if close.error_code == 1u8.into()));
+            drop(io);
+            drop(connection);
+            endpoint.wait_idle().await;
+        };
+        let response = fixture::response();
+        let ((), (), served) = tokio::join!(server, client, target.serve(&response));
+        assert!(served.unwrap().starts_with(b"GET /balance HTTP/1.1\r\n"));
+    }).await.unwrap();
 }

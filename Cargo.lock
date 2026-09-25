@@ -2981,9 +2981,11 @@ dependencies = [
 name = "proof-client"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "clap",
  "futures",
  "futures-rustls",
+ "http",
  "httparse",
  "p3-field",
  "p3-koala-bear",
@@ -3007,7 +3009,6 @@ dependencies = [
 name = "proof-client-core"
 version = "0.1.0"
 dependencies = [
- "base64 0.23.1",
  "clap",
  "futures",
  "futures-rustls",

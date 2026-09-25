@@ -6,6 +6,7 @@ use futures_rustls::{
         pki_types::{CertificateDer, PrivateKeyDer},
     },
 };
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 use std::{fs::OpenOptions, io::Write, net::SocketAddr, path::Path, sync::Arc};
 use tokio::net::TcpListener;
 use tokio_util::compat::TokioAsyncReadCompatExt;
@@ -29,9 +30,31 @@ pub enum Error {
     #[error("invalid fixture request: {0}")]
     Request(&'static str),
 }
-pub const BODY: &str =
-    r#"{"products":[{"AvailableBalance":42.1200,"currency":"PLN","account":"PRIVATE"}]}"#;
 pub const DISCLOSURE: &str = include_str!("../disclosure.json");
+
+pub struct SampleData {
+    pub request_cookie: String,
+    pub response_cookie: String,
+    pub account: String,
+}
+impl SampleData {
+    pub fn body(&self) -> String {
+        format!(
+            r#"{{"products":[{{"AvailableBalance":42.1200,"currency":"PLN","account":"{}"}}]}}"#,
+            self.account
+        )
+    }
+}
+pub fn sample_data() -> SampleData {
+    // Policy: a fixed seed makes synthetic fixture values reproducible.
+    const SEED: u64 = 0;
+    let mut rng = StdRng::seed_from_u64(SEED);
+    SampleData {
+        request_cookie: format!("session={:016x}", rng.random::<u64>()),
+        response_cookie: format!("session={:016x}", rng.random::<u64>()),
+        account: format!("demo-account-{:016x}", rng.random::<u64>()),
+    }
+}
 
 pub struct Fixture {
     listener: TcpListener,
@@ -42,6 +65,7 @@ impl Fixture {
         std::fs::create_dir_all(directory)?;
         let target = rcgen::generate_simple_self_signed(vec!["localhost".into()])?;
         let verifier = rcgen::generate_simple_self_signed(vec!["localhost".into()])?;
+        let listener = TcpListener::bind(address).await?;
         for (name, bytes) in [
             ("target.pem", target.cert.pem()),
             ("verifier.pem", verifier.cert.pem()),
@@ -69,7 +93,7 @@ impl Fixture {
             PrivateKeyDer::Pkcs8(target.signing_key.serialize_der().into()),
         )?;
         Ok(Self {
-            listener: TcpListener::bind(address).await?,
+            listener,
             tls: TlsAcceptor::from(Arc::new(config)),
         })
     }
@@ -88,19 +112,33 @@ impl Fixture {
             tls.read_exact(&mut byte).await?;
             request.extend_from_slice(&byte);
         }
-        let body_length = {
+        let (body_length, keep_alive) = {
             let mut headers = [httparse::EMPTY_HEADER; 64];
             let mut parsed = httparse::Request::new(&mut headers);
             if !parsed.parse(&request)?.is_complete() || parsed.path != Some("/balance") {
                 return Err(Error::Request("fixture expects /balance"));
             }
-            parsed
+            for header in parsed
+                .headers
+                .iter()
+                .filter(|h| h.name.eq_ignore_ascii_case("cookie"))
+            {
+                if header.value != sample_data().request_cookie.as_bytes() {
+                    return Err(Error::Request("fixture cookie does not match"));
+                }
+            }
+            let keep_alive = parsed.headers.iter().any(|h| {
+                h.name.eq_ignore_ascii_case("connection")
+                    && h.value.eq_ignore_ascii_case(b"keep-alive")
+            });
+            let length = parsed
                 .headers
                 .iter()
                 .find(|h| h.name.eq_ignore_ascii_case("content-length"))
                 .map(|h| -> Result<usize, Error> { Ok(std::str::from_utf8(h.value)?.parse()?) })
                 .transpose()?
-                .unwrap_or(0)
+                .unwrap_or(0);
+            (length, keep_alive)
         };
         if body_length > proof_client_core::tls::attest::MAX_SENT {
             return Err(Error::Request("fixture body exceeds limit"));
@@ -109,11 +147,22 @@ impl Fixture {
         tls.read_exact(&mut body).await?;
         request.extend(body);
         tls.write_all(response).await?;
+        tls.flush().await?;
+        if keep_alive
+            && !response
+                .windows(b"Connection: close".len())
+                .any(|w| w == b"Connection: close")
+            && tls.read(&mut byte).await? != 0
+        {
+            return Err(Error::Request("unexpected pipelined request"));
+        }
         tls.close().await?;
         Ok(request)
     }
 }
 
 pub fn response() -> Vec<u8> {
-    format!("HTTP/1.1 103 Early Hints\r\nLink: </PRIVATE>\r\n\r\nHTTP/1.1 200 OK\r\nSet-Cookie: SECRET\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{BODY}", BODY.len()).into_bytes()
+    let data = sample_data();
+    let body = data.body();
+    format!("HTTP/1.1 103 Early Hints\r\nLink: </assets/app.css>; rel=preload; as=style\r\n\r\nHTTP/1.1 200 OK\r\nSet-Cookie: {}\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}", data.response_cookie, body.len()).into_bytes()
 }

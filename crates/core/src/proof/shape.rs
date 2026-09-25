@@ -91,7 +91,12 @@ pub(crate) fn allocate_bound(
         });
     }
     let has_permutation = !permutation.is_empty();
-    let mut rounds = vec![random, main, quotient];
+    let random_width = FRI.num_random_codewords() as usize;
+    let mut rounds = vec![
+        (random_width, random),
+        (random_width, main),
+        (random_width, quotient),
+    ];
     // Use trusted preprocessing order.
     if let Some(global) = &common.preprocessed {
         let preprocessed = global
@@ -112,37 +117,29 @@ pub(crate) fn allocate_bound(
                 ))
             })
             .collect::<Result<Vec<_>, Error>>()?;
-        rounds.push(preprocessed);
+        rounds.push((0, preprocessed));
     }
     if has_permutation {
-        rounds.push(permutation);
+        rounds.push((random_width, permutation));
     }
     let queries = FRI.num_queries() as usize;
-    let random_width = FRI.num_random_codewords() as usize;
     let salt_width = FRI.salt_elements() as usize;
     let hiding = rounds
         .iter()
-        .enumerate()
-        .map(|(index, round)| {
+        .map(|&(random_width, ref round)| {
             round
                 .iter()
-                .map(|&(_, points)| {
-                    vec![vec![E::ZERO; if index == 3 { 0 } else { random_width }]; points]
-                })
+                .map(|&(_, points)| vec![vec![E::ZERO; random_width]; points])
                 .collect()
         })
         .collect();
     let input_openings = rounds
         .iter()
-        .enumerate()
-        .map(|(index, round)| BatchMultiOpening {
+        .map(|&(random_width, ref round)| BatchMultiOpening {
             opened_values: vec![
                 round
                     .iter()
-                    .map(|&(width, _)| vec![
-                        F::ZERO;
-                        width + if index == 3 { 0 } else { random_width }
-                    ])
+                    .map(|&(width, _)| vec![F::ZERO; width + random_width])
                     .collect();
                 queries
             ],

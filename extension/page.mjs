@@ -17,9 +17,19 @@ for (const form of document.querySelectorAll("form")) {
     const abort = () => controller.abort();
     try {
       const args = [form.id];
-      for (const [name, value] of new FormData(form)) {
-        if (typeof value !== "string") throw new NativeError("Expected a file path");
-        if (value !== "") args.push(`--${name}`, value);
+      const data = new FormData(form);
+      for (const [name, value] of data) {
+        if (typeof value !== "string") throw new NativeError("Expected a text argument");
+        if (name !== "request-args" && value !== "") args.push(`--${name}`, value);
+      }
+      const request = data.get("request-args");
+      if (request !== null) {
+        if (typeof request !== "string") throw new NativeError("Expected request arguments");
+        const values = JSON.parse(request);
+        if (!Array.isArray(values) || !values.every((value) => typeof value === "string")) {
+          throw new NativeError("Request arguments must be a JSON array of strings");
+        }
+        args.push(...values);
       }
       cancel.addEventListener("click", abort, { once: true });
       window.addEventListener("pagehide", abort, { once: true });
@@ -33,7 +43,12 @@ for (const form of document.querySelectorAll("form")) {
         },
         controller.signal,
       );
-      output.textContent = `Completed\n${JSON.stringify(result, null, 2)}`;
+      if ("stdout_base64" in result && typeof result.stdout_base64 === "string") {
+        const bytes = Uint8Array.from(atob(result.stdout_base64), (byte) => byte.charCodeAt(0));
+        output.textContent = new TextDecoder().decode(bytes);
+      } else {
+        output.textContent = `Completed\n${JSON.stringify(result, null, 2)}`;
+      }
     } catch (error) {
       output.textContent = `Failed: ${error instanceof Error ? error.message : "Unknown native failure"}`;
     } finally {

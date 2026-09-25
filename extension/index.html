@@ -57,9 +57,9 @@
       <section>
         <h2>Serve / attest</h2>
         <p>
-          Start Serve, wait for Ready, then run Attest with the same session ID. The verifier
-          receives selected bytes and transcript lengths; the private files contain the full HTTP
-          request and response.
+          Start Serve, wait for Ready, then run Attest using its address. The verifier receives
+          selected bytes and transcript lengths; Attest displays the private response and saves
+          private commitment openings in metadata.
         </p>
         <div class="forms">
           <form id="serve">
@@ -73,21 +73,9 @@
               ><input id="serve-key" name="key" type="text" required />
               <label for="serve-server-name">Expected target DNS name</label
               ><input id="serve-server-name" name="server-name" type="text" required />
-              <label for="serve-session">Session ID</label
-              ><input
-                id="serve-session"
-                name="session"
-                type="text"
-                pattern="[A-Za-z0-9_\-]+"
-                maxlength="128"
-                required
-              />
               <label for="serve-target-ca">Target CA path (optional)</label
               ><input id="serve-target-ca" name="target-ca" type="text" />
-              <label for="serve-sent-output">New redacted sent.txt path</label
-              ><input id="serve-sent-output" name="sent-output" type="text" required />
-              <label for="serve-recv-output">New redacted recv.txt path</label
-              ><input id="serve-recv-output" name="recv-output" type="text" required />
+
               <label for="serve-metadata-output">New commitment metadata JSON path</label
               ><input id="serve-metadata-output" name="metadata-output" type="text" required />
               <button type="submit">Serve</button>
@@ -97,35 +85,23 @@
           <form id="attest">
             <fieldset>
               <legend>Attest</legend>
-              <label for="attest-request">Request JSON path</label
-              ><input id="attest-request" name="request" type="text" required />
+              <label for="attest-request-args">Request arguments as a JSON array</label>
+              <textarea id="attest-request-args" name="request-args" required>
+["--url", "https://localhost:7443/balance", "--data-raw", "{}"]</textarea>
               <label for="attest-disclosure">Disclosure JSON path</label
               ><input id="attest-disclosure" name="disclosure" type="text" required />
               <label for="attest-verifier">Verifier address, e.g. 127.0.0.1:4433</label
               ><input id="attest-verifier" name="verifier" type="text" required />
               <label for="attest-verifier-name">Verifier certificate DNS name</label
               ><input id="attest-verifier-name" name="verifier-name" type="text" required />
-              <label for="attest-session">Matching session ID</label
-              ><input
-                id="attest-session"
-                name="session"
-                type="text"
-                pattern="[A-Za-z0-9_\-]+"
-                maxlength="128"
-                required
-              />
               <label for="attest-verifier-ca">Verifier CA path (optional)</label
               ><input id="attest-verifier-ca" name="verifier-ca" type="text" />
               <label for="attest-target-ca">Target CA path (optional)</label
               ><input id="attest-target-ca" name="target-ca" type="text" />
-              <label for="attest-sent-output">New private sent.txt path</label
-              ><input id="attest-sent-output" name="sent-output" type="text" required />
-              <label for="attest-recv-output">New private recv.txt path</label
-              ><input id="attest-recv-output" name="recv-output" type="text" required />
-              <label for="attest-metadata-output">New commitment metadata JSON path</label
+
+              <label for="attest-metadata-output">New private metadata JSON path</label
               ><input id="attest-metadata-output" name="metadata-output" type="text" required />
-              <label for="attest-secrets-output">New private opening secrets JSON path</label
-              ><input id="attest-secrets-output" name="secrets-output" type="text" required />
+
               <button type="submit">Attest</button>
             </fieldset>
             <button type="button" disabled>Cancel</button><output aria-live="polite"></output>

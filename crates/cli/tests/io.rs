@@ -46,9 +46,9 @@ fn admission_rejects_ambiguity_without_reflecting_private_arguments() {
     for input in [
         "{",
         "[]",
-        r#"{"protocol":"proof-client/8","args":[],"args":[]}"#,
+        r#"{"protocol":"proof-client/10","args":[],"args":[]}"#,
         r#"{"protocol":"other","args":[]}"#,
-        r#"{"protocol":"proof-client/8","args":[],"secret":"SYNTHETIC_SECRET"}"#,
+        r#"{"protocol":"proof-client/10","args":[],"secret":"SYNTHETIC_SECRET"}"#,
     ] {
         let result = response(input.as_bytes());
         assert_eq!(result["event"], "failed");
@@ -164,42 +164,19 @@ fn every_native_file_argument_requires_an_absolute_path() {
         ("verify", vec!["circuit", "public", "proof"], vec![]),
         (
             "serve",
-            vec![
-                "cert",
-                "key",
-                "target-ca",
-                "sent-output",
-                "recv-output",
-                "metadata-output",
-            ],
-            vec![
-                "--listen",
-                "127.0.0.1:0",
-                "--server-name",
-                "localhost",
-                "--session",
-                "test",
-            ],
+            vec!["cert", "key", "target-ca", "metadata-output"],
+            vec!["--listen", "127.0.0.1:0", "--server-name", "localhost"],
         ),
         (
             "attest",
+            vec!["disclosure", "verifier-ca", "target-ca", "metadata-output"],
             vec![
-                "request",
-                "disclosure",
-                "verifier-ca",
-                "target-ca",
-                "sent-output",
-                "recv-output",
-                "metadata-output",
-                "secrets-output",
-            ],
-            vec![
+                "--url",
+                "https://localhost/",
                 "--verifier",
                 "127.0.0.1:7047",
                 "--verifier-name",
                 "localhost",
-                "--session",
-                "test",
             ],
         ),
     ] {
@@ -227,70 +204,43 @@ fn every_native_file_argument_requires_an_absolute_path() {
 }
 
 #[test]
-fn transcript_destinations_are_distinct_and_new_before_network_io() {
+fn metadata_destination_must_be_new_before_network_io() {
     let dir = tempfile::tempdir().unwrap();
-    let fresh = dir.path().join("sent.txt");
-    let occupied = dir.path().join("recv.txt");
+    let occupied = dir.path().join("metadata.json");
     std::fs::write(&occupied, b"existing").unwrap();
-    for (sent, recv) in [(&fresh, &fresh), (&fresh, &occupied), (&occupied, &fresh)] {
-        for (command, flags) in [
-            (
-                "serve",
-                vec![
-                    "--listen",
-                    "127.0.0.1:0",
-                    "--cert",
-                    "/missing",
-                    "--key",
-                    "/missing",
-                    "--server-name",
-                    "localhost",
-                ],
-            ),
-            (
-                "attest",
-                vec![
-                    "--verifier",
-                    "127.0.0.1:1",
-                    "--verifier-name",
-                    "localhost",
-                    "--request",
-                    "/missing",
-                    "--disclosure",
-                    "/missing",
-                ],
-            ),
-        ] {
-            let mut args = vec![command.to_owned()];
-            args.extend(flags.into_iter().map(str::to_owned));
-            args.extend([
-                "--session".into(),
-                "test".into(),
-                "--sent-output".into(),
-                sent.to_str().unwrap().into(),
-                "--recv-output".into(),
-                recv.to_str().unwrap().into(),
-            ]);
-            args.extend([
-                "--metadata-output".into(),
-                dir.path().join("metadata.json").to_str().unwrap().into(),
-            ]);
-            if command == "attest" {
-                args.extend([
-                    "--secrets-output".into(),
-                    dir.path().join("secrets.json").to_str().unwrap().into(),
-                ]);
-            }
-            let event = response(
-                &serde_json::to_vec(&json!({"protocol":stdio::PROTOCOL,"args":args})).unwrap(),
-            );
-            assert_eq!(
-                event,
-                json!({"event":"failed","message":"output paths must be distinct and must not already exist"})
-            );
-            assert!(!fresh.exists());
-            assert_eq!(std::fs::read(&occupied).unwrap(), b"existing");
-            assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
-        }
+    for mut args in [
+        vec![
+            "serve",
+            "--listen",
+            "127.0.0.1:0",
+            "--cert",
+            "/missing",
+            "--key",
+            "/missing",
+            "--server-name",
+            "localhost",
+        ],
+        vec![
+            "attest",
+            "--url",
+            "https://localhost/",
+            "--verifier",
+            "127.0.0.1:1",
+            "--verifier-name",
+            "localhost",
+            "--disclosure",
+            "/missing",
+        ],
+    ] {
+        args.extend(["--metadata-output", occupied.to_str().unwrap()]);
+        let event = response(
+            &serde_json::to_vec(&json!({"protocol":stdio::PROTOCOL,"args":args})).unwrap(),
+        );
+        assert_eq!(
+            event,
+            json!({"event":"failed","message":"output path must not already exist"})
+        );
+        assert_eq!(std::fs::read(&occupied).unwrap(), b"existing");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }

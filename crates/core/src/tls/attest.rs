@@ -1,6 +1,5 @@
 use crate::tls::disclosure::{self, Disclosure, DisclosureError};
-use base64::{Engine, engine::general_purpose::STANDARD};
-use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, TryFutureExt};
+use futures::{AsyncRead, AsyncWrite, AsyncWriteExt, TryFutureExt};
 use http::{HeaderName, HeaderValue, Method};
 use serde::{Deserialize, Serialize};
 use std::{future::IntoFuture, time::Duration};
@@ -15,7 +14,7 @@ use tlsn::{
 };
 use tlsn::{
     hash::HashAlgId,
-    rangeset::{ops::Set, set::RangeSet},
+    rangeset::ops::Set,
     transcript::{
         Direction, Transcript, TranscriptCommitConfig, TranscriptCommitment,
         TranscriptCommitmentKind, TranscriptSecret, hash::PlaintextHash,
@@ -25,20 +24,12 @@ use tlsn::{
 
 // Policy: shared MPC transcript budgets.
 pub const MAX_SENT: usize = 16 * 1024;
-// Policy: bound request JSON, including escaping/base64 overhead.
-pub const MAX_REQUEST_BYTES: usize = 4 * MAX_SENT;
 pub const MAX_RECEIVED: usize = 64 * 1024;
-// Policy: decrypt only TLS control messages online; application bytes are deferred.
-pub const MAX_RECEIVED_ONLINE: usize = 32;
 // Policy: bound admission and MPC work per session.
 pub const SESSION_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(thiserror::Error)]
 pub enum AttestError {
-    #[error("invalid request JSON")]
-    Json(#[from] serde_json::Error),
-    #[error("invalid base64 request body")]
-    Base64(#[from] base64::DecodeError),
     #[error("expected an HTTPS URL without credentials or a fragment")]
     Url,
     #[error("invalid URL syntax")]
@@ -98,25 +89,13 @@ impl Request {
         (self.domain.as_str(), self.port)
     }
 
-    pub fn parse(input: &[u8]) -> Result<Self, AttestError> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct WireRequest {
-            method: String,
-            url: String,
-            headers: Vec<(String, String)>,
-            body_base64: String,
-        }
-        if input.len() > MAX_REQUEST_BYTES {
-            return Err(AttestError::Limit);
-        }
-        let WireRequest {
-            method,
-            url,
-            headers,
-            body_base64,
-        } = serde_json::from_slice(input)?;
-        let url = url::Url::parse(&url)?;
+    pub fn new(
+        url: &str,
+        method: Method,
+        headers: Vec<(HeaderName, HeaderValue)>,
+        body: Vec<u8>,
+    ) -> Result<Self, AttestError> {
+        let url = url::Url::parse(url)?;
         if url.scheme() != "https"
             || !url.username().is_empty()
             || url.password().is_some()
@@ -125,39 +104,50 @@ impl Request {
             return Err(AttestError::Url);
         }
         let domain = DnsName::try_from(url.domain().ok_or(AttestError::Url)?)?;
-        let method = Method::from_bytes(method.as_bytes())?;
         if method == Method::CONNECT {
             return Err(AttestError::Request);
         }
-        let body = STANDARD.decode(body_base64)?;
         let port = url.port_or_known_default().ok_or(AttestError::Url)?;
         let authority = match url.port() {
             Some(port) => format!("{domain}:{port}"),
             None => domain.to_string(),
         };
+        let mut host = false;
+        let mut length = false;
         let target = &url[url::Position::BeforePath..url::Position::AfterQuery];
-        let mut bytes = format!("{method} {target} HTTP/1.1\r\nhost: {authority}\r\nconnection: close\r\naccept-encoding: identity\r\ncontent-length: {}\r\n", body.len()).into_bytes();
+        let mut bytes = format!("{method} {target} HTTP/1.1\r\n").into_bytes();
         for (name, value) in headers {
-            let name = HeaderName::from_bytes(name.as_bytes())?;
-            let value = HeaderValue::from_str(&value)?;
-            if matches!(
-                name.as_str(),
-                "host"
-                    | "connection"
-                    | "accept-encoding"
-                    | "content-length"
-                    | "transfer-encoding"
-                    | "upgrade"
-                    | "expect"
-                    | "trailer"
-                    | "te"
-            ) {
-                return Err(AttestError::Request);
+            match name.as_str() {
+                "host" => {
+                    if host || !value.as_bytes().eq_ignore_ascii_case(authority.as_bytes()) {
+                        return Err(AttestError::Request);
+                    }
+                    host = true;
+                }
+                "content-length" => {
+                    if length || value.as_bytes() != body.len().to_string().as_bytes() {
+                        return Err(AttestError::Request);
+                    }
+                    length = true;
+                }
+                "connection"
+                    if value.as_bytes().eq_ignore_ascii_case(b"close")
+                        || value.as_bytes().eq_ignore_ascii_case(b"keep-alive") => {}
+                "accept-encoding" if value.as_bytes().eq_ignore_ascii_case(b"identity") => {}
+                "connection" | "accept-encoding" | "transfer-encoding" | "upgrade" | "expect"
+                | "trailer" | "te" => return Err(AttestError::Request),
+                _ => {}
             }
             bytes.extend_from_slice(name.as_str().as_bytes());
             bytes.extend_from_slice(b": ");
             bytes.extend_from_slice(value.as_bytes());
             bytes.extend_from_slice(b"\r\n");
+        }
+        if !host {
+            bytes.extend_from_slice(format!("host: {authority}\r\n").as_bytes());
+        }
+        if !length && !body.is_empty() {
+            bytes.extend_from_slice(format!("content-length: {}\r\n", body.len()).as_bytes());
         }
         bytes.extend_from_slice(b"\r\n");
         bytes.extend_from_slice(&body);
@@ -170,6 +160,10 @@ impl Request {
             method,
             bytes,
         })
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
     }
 }
 
@@ -185,7 +179,7 @@ enum ReportKind {
     LiveVerifierAccepted,
 }
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Report {
+pub struct ReportData {
     kind: ReportKind,
     server_name: String,
     sent_len: usize,
@@ -195,7 +189,7 @@ pub struct Report {
     commitments: Vec<PlaintextHash>,
 }
 
-impl Report {
+impl ReportData {
     pub fn server_name(&self) -> &str {
         &self.server_name
     }
@@ -232,6 +226,71 @@ impl Report {
     pub(crate) fn accepted(mut self) -> Self {
         self.kind = ReportKind::LiveVerifierAccepted;
         self
+    }
+}
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub struct VerifiedReport(pub(super) ReportData);
+impl VerifiedReport {
+    pub fn data(&self) -> &ReportData {
+        &self.0
+    }
+}
+
+#[derive(Serialize)]
+pub struct Opening {
+    #[serde(serialize_with = "serialize_hash_secret")]
+    secret: tlsn::transcript::hash::PlaintextHashSecret,
+    plaintext: Vec<u8>,
+}
+fn serialize_hash_secret<S: serde::Serializer>(
+    secret: &tlsn::transcript::hash::PlaintextHashSecret,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_newtype_variant("TranscriptSecret", 0, "Hash", secret)
+}
+impl Opening {
+    fn new(secret: TranscriptSecret, transcript: &Transcript) -> Result<Self, AttestError> {
+        let TranscriptSecret::Hash(secret) = secret else {
+            return Err(AttestError::Policy);
+        };
+        let bytes = match secret.direction {
+            Direction::Sent => transcript.sent(),
+            Direction::Received => transcript.received(),
+        };
+        let mut plaintext = Vec::new();
+        for range in secret.idx.iter() {
+            plaintext.extend_from_slice(bytes.get(range).ok_or(AttestError::Transcript)?);
+        }
+        Ok(Self { secret, plaintext })
+    }
+    pub fn secret(&self) -> &tlsn::transcript::hash::PlaintextHashSecret {
+        &self.secret
+    }
+    pub fn plaintext(&self) -> &[u8] {
+        &self.plaintext
+    }
+}
+
+pub struct ProverOutput {
+    pub(super) report: ReportData,
+    pub(super) transcript: Transcript,
+    pub(super) openings: Vec<Opening>,
+    pub(super) response: Vec<u8>,
+}
+impl ProverOutput {
+    pub fn report(&self) -> &ReportData {
+        &self.report
+    }
+    pub fn transcript(&self) -> &Transcript {
+        &self.transcript
+    }
+    pub fn openings(&self) -> &[Opening] {
+        &self.openings
+    }
+    pub fn response(&self) -> &[u8] {
+        &self.response
     }
 }
 
@@ -326,19 +385,6 @@ fn admit_commitments(request: &tlsn::config::prove::ProveRequest) -> Result<(), 
     Ok(())
 }
 
-fn commit_ranges(
-    bytes: &[u8],
-    direction: disclosure::Direction<'_>,
-    selections: &disclosure::MessageDisclosure,
-    revealed: &RangeSet<usize>,
-) -> Result<RangeSet<usize>, AttestError> {
-    let committed = disclosure::select(bytes, direction, selections)?;
-    if !committed.is_disjoint(revealed) {
-        return Err(AttestError::Transcript);
-    }
-    Ok(committed)
-}
-
 fn segments(
     bytes: &[u8],
     ranges: impl IntoIterator<Item = std::ops::Range<usize>>,
@@ -361,7 +407,7 @@ pub async fn attest_session<T, S>(
     verifier_socket: T,
     server_socket: S,
     roots: RootCertStore,
-) -> Result<(T, (Report, Transcript, Vec<TranscriptSecret>)), AttestError>
+) -> Result<(T, ProverOutput), AttestError>
 where
     T: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
@@ -375,7 +421,8 @@ where
                 MpcTlsConfig::builder()
                     .max_sent_data(MAX_SENT)
                     .max_recv_data(MAX_RECEIVED)
-                    .max_recv_data_online(MAX_RECEIVED_ONLINE)
+                    .max_recv_data_online(MAX_RECEIVED)
+                    .defer_decryption_from_start(false)
                     .build()?,
             )
             .await?;
@@ -390,42 +437,22 @@ where
         let exchange = async {
             connection.write_all(&request.bytes).await?;
             connection.flush().await?;
-            let received = futures::io::copy(
-                &mut (&mut connection).take((MAX_RECEIVED + 1) as u64),
-                &mut futures::io::sink(),
-            )
-            .await?;
-            if received > MAX_RECEIVED as u64 {
-                return Err(AttestError::Limit);
-            }
+            let response =
+                disclosure::receive(&mut connection, &request.method, MAX_RECEIVED).await?;
             connection.close().await?;
-            Ok::<_, AttestError>(())
+            Ok::<_, AttestError>(response)
         };
-        let (mut prover, ()) =
+        let (mut prover, response) =
             futures::try_join!(prover.into_future().err_into::<AttestError>(), exchange)?;
         let transcript = prover.transcript();
-        let sent = disclosure::select(
+        let (sent, commit_sent) = disclosure::resolve(
             transcript.sent(),
             disclosure::Direction::Request,
             &disclosure.sent,
-        )?;
-        let received = disclosure::select(
-            transcript.received(),
-            disclosure::Direction::Response(&request.method),
-            &disclosure.received,
-        )?;
-        let commit_sent = commit_ranges(
-            transcript.sent(),
-            disclosure::Direction::Request,
             &disclosure.commit.sent,
-            &sent,
         )?;
-        let commit_recv = commit_ranges(
-            transcript.received(),
-            disclosure::Direction::Response(&request.method),
-            &disclosure.commit.received,
-            &received,
-        )?;
+        let (received, commit_recv) =
+            response.resolve(&disclosure.received, &disclosure.commit.received)?;
         let mut commitments = TranscriptCommitConfig::builder(transcript);
         commitments.default_kind(TranscriptCommitmentKind::Hash {
             alg: COMMITMENT_HASH,
@@ -443,7 +470,7 @@ where
         config.reveal_recv(&received)?;
         config.transcript_commit(commitments.build()?);
         let output = prover.prove(&config.build()?).await?;
-        let report = Report {
+        let report = ReportData {
             kind: ReportKind::ProverDisclosure,
             server_name: request.domain.to_string(),
             sent_len: private.sent().len(),
@@ -454,12 +481,25 @@ where
         };
         prover.close().await?;
         handle.close();
-        Ok::<_, AttestError>((report, private, output.transcript_secrets))
+        let openings = output
+            .transcript_secrets
+            .into_iter()
+            .map(|secret| Opening::new(secret, &private))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok::<_, AttestError>(ProverOutput {
+            report,
+            transcript: private,
+            openings,
+            response: response.into_body(),
+        })
     };
     futures::try_join!(driver.err_into::<AttestError>(), operation)
 }
 
-pub async fn verify_session<T>(socket: T, roots: RootCertStore) -> Result<(T, Report), AttestError>
+pub async fn verify_session<T>(
+    socket: T,
+    roots: RootCertStore,
+) -> Result<(T, VerifiedReport), AttestError>
 where
     T: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
@@ -480,10 +520,10 @@ where
         let mpc = verifier.config();
         if mpc.max_sent_data() > MAX_SENT
             || mpc.max_recv_data() > MAX_RECEIVED
-            || mpc.max_recv_data_online() > MAX_RECEIVED_ONLINE
+            || mpc.max_recv_data_online() != mpc.max_recv_data()
             || mpc.max_sent_records().is_some()
             || mpc.max_recv_records_online().is_some()
-            || !mpc.defer_decryption_from_start()
+            || mpc.defer_decryption_from_start()
         {
             verifier.reject(Some("unsupported budget")).await?;
             return Err(AttestError::Policy);
@@ -497,7 +537,7 @@ where
         verifier.close().await?;
         handle.close();
         let transcript = output.transcript.ok_or(AttestError::Missing)?;
-        Ok(Report {
+        Ok(VerifiedReport(ReportData {
             kind: ReportKind::LiveVerifierAccepted,
             server_name: output.server_name.ok_or(AttestError::Missing)?.to_string(),
             sent_len: transcript.len_sent(),
@@ -508,7 +548,7 @@ where
                 transcript.received_authed().iter(),
             )?,
             commitments: hashes(output.transcript_commitments)?,
-        })
+        }))
     };
     futures::try_join!(driver.err_into::<AttestError>(), operation)
 }

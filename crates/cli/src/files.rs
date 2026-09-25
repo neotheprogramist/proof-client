@@ -17,10 +17,8 @@ pub(crate) fn read(path: &Path, limit: usize) -> Result<Vec<u8>, FileError> {
 pub enum FileError {
     #[error("input exceeds its admission limit")]
     Limit,
-    #[error("output paths must be distinct and must not already exist")]
+    #[error("output path must not already exist")]
     Output,
-    #[error("cannot render transcript: {0}")]
-    Transcript(#[from] proof_client_core::tls::attest::AttestError),
     #[error("cannot encode artifact")]
     Json(#[from] serde_json::Error),
     #[error("local file I/O failed: {0}")]
@@ -57,21 +55,9 @@ impl Output {
         Ok(Self { parent, path })
     }
     pub(crate) fn publish(self, value: &impl serde::Serialize) -> Result<(), FileError> {
-        self.write(|file| {
-            serde_json::to_writer_pretty(&mut *file, value)?;
-            file.write_all(b"\n")?;
-            Ok(())
-        })
-    }
-    pub(crate) fn publish_bytes(self, bytes: &[u8]) -> Result<(), FileError> {
-        self.write(|file| Ok(file.write_all(bytes)?))
-    }
-    fn write(
-        self,
-        write: impl FnOnce(&mut File) -> Result<(), FileError>,
-    ) -> Result<(), FileError> {
         let mut file = tempfile::NamedTempFile::new_in(self.parent)?;
-        write(file.as_file_mut())?;
+        serde_json::to_writer_pretty(file.as_file_mut(), value)?;
+        file.write_all(b"\n")?;
         file.as_file().sync_all()?;
         file.persist_noclobber(self.path)?;
         Ok(())
@@ -114,18 +100,4 @@ fn source_name(root: &Path, path: &Path) -> std::path::PathBuf {
         Ok(relative) => relative.to_owned(),
         Err(_) => path.to_owned(),
     }
-}
-
-pub(crate) fn distinct_outputs<const N: usize>(
-    outputs: [Output; N],
-) -> Result<[Output; N], FileError> {
-    if outputs.iter().enumerate().any(|(i, output)| {
-        outputs
-            .iter()
-            .take(i)
-            .any(|other| other.path() == output.path())
-    }) {
-        return Err(FileError::Output);
-    }
-    Ok(outputs)
 }

@@ -1,9 +1,0 @@
-{
-  "method": "POST",
-  "url": "https://online.mbank.pl/REPLACE_WITH_CAPTURED_PATH",
-  "headers": [
-    ["content-type", "application/json"],
-    ["cookie", "REPLACE_WITH_CURRENT_COOKIE"]
-  ],
-  "body_base64": "e30="
-}
