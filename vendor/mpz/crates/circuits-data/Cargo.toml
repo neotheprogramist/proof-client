@@ -1,0 +1,33 @@
+[package]
+name = "mpz-circuits-data"
+version = "0.1.0-alpha.6"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[lib]
+name = "mpz_circuits_data"
+
+[features]
+default = []
+aes = []
+sha2 = []
+blake3 = []
+keccak = []
+
+[dependencies]
+bincode = { workspace = true }
+mpz-circuits-core = { workspace = true }
+once_cell = { workspace = true }
+
+[dev-dependencies]
+aes = { workspace = true }
+keccak = { workspace = true }
+rand = { workspace = true }
+sha2 = { workspace = true }
+zerocopy = { workspace = true }
+
+[build-dependencies]
+bincode = { workspace = true }
+mpz-circuits-core = { workspace = true }

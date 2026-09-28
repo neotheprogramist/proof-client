@@ -1,0 +1,71 @@
+diff --git a/fri/src/hiding_pcs.rs b/fri/src/hiding_pcs.rs
+--- a/fri/src/hiding_pcs.rs
++++ b/fri/src/hiding_pcs.rs
+@@ -205,7 +205,7 @@
+     Challenge: TwoAdicField + ExtensionField<Val>,
+     Challenger:
+         FieldChallenger<Val> + CanObserve<FriMmcs::Commitment> + GrindingChallenger<Witness = Val>,
+-    R: CryptoRng + Send + Sync,
++    R: CryptoRng + SeedableRng + Send + Sync,
+ {
+     type Domain = TwoAdicMultiplicativeCoset<Val>;
+     type Commitment = InputMmcs::Commitment;
+@@ -234,6 +234,8 @@
+         for (_, mat) in &evaluations {
+             self.check_hiding_budget(mat.height(), Challenge::DIMENSION, 1)?;
+         }
++        // Nested Rayon work must never own the shared randomness lock.
++        let mut rng = R::from_rng(&mut *self.rng.lock());
+         let randomized_evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)> =
+             info_span!("randomize polys").in_scope(|| {
+                 evaluations
+@@ -246,7 +248,7 @@
+ 
+                         let mut random_evaluation = mat.with_random_cols(
+                             mat_width + 2 * self.num_random_codewords,
+-                            &mut *self.rng.lock(),
++                            &mut rng,
+                         );
+                         random_evaluation.width = mat_width + self.num_random_codewords;
+ 
+@@ -298,7 +300,7 @@
+     Challenge: TwoAdicField + ExtensionField<Val>,
+     Challenger:
+         FieldChallenger<Val> + CanObserve<FriMmcs::Commitment> + GrindingChallenger<Witness = Val>,
+-    R: CryptoRng + Send + Sync,
++    R: CryptoRng + SeedableRng + Send + Sync,
+ {
+     type EvaluationsOnDomain<'a> =
+         HorizontallyTruncated<Val, RowIndexMappedView<BitReversalPerm, RowMajorMatrixCow<'a, Val>>>;
+@@ -493,10 +495,11 @@
+             .map(|i| cis[i] * last_chunk_ci_inv)
+             .collect_vec();
+ 
+-        let mut rng = self.rng.lock();
++        // Matrix expansion and FFTs can schedule another call on this PCS.
++        let mut rng = R::from_rng(&mut *self.rng.lock());
+         let randomized_evaluations: Vec<RowMajorMatrix<Val>> = evaluations
+             .into_iter()
+-            .map(|mat| mat.with_random_cols(self.num_random_codewords, &mut *rng))
++            .map(|mat| mat.with_random_cols(self.num_random_codewords, &mut rng))
+             .collect();
+         // Add random values to the LDE evaluations as described in https://eprint.iacr.org/2024/1037.pdf.
+         // If we have `d` chunks, let q'_i(X) = q_i(X) + v_H_i(X) * t_i(X) where t(X) is random, for 1 <= i < d.
+diff --git a/merkle-tree/src/hiding_mmcs.rs b/merkle-tree/src/hiding_mmcs.rs
+--- a/merkle-tree/src/hiding_mmcs.rs
++++ b/merkle-tree/src/hiding_mmcs.rs
+@@ -134,11 +134,12 @@
+         &self,
+         inputs: Vec<M>,
+     ) -> (Self::Commitment, Self::ProverData<M>) {
+-        let mut rng = self.rng.lock();
++        // Hashing can schedule nested Rayon work; lock only seed derivation.
++        let mut rng = R::from_rng(&mut *self.rng.lock());
+         let salted_inputs = inputs
+             .into_iter()
+             .map(|mat| {
+-                let salts = RowMajorMatrix::rand(&mut *rng, mat.height(), SALT_ELEMS);
++                let salts = RowMajorMatrix::rand(&mut rng, mat.height(), SALT_ELEMS);
+                 HorizontalPair::new(mat, salts)
+             })
+             .collect();

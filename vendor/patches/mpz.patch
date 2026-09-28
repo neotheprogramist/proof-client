@@ -1,0 +1,415 @@
+diff --git a/crates/circuits-data/build.rs b/crates/circuits-data/build.rs
+--- a/crates/circuits-data/build.rs
++++ b/crates/circuits-data/build.rs
+@@ -9,51 +9,52 @@
+
+     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+     let circuits_dir = PathBuf::from(manifest_dir).join("../circuits-core/bristol");
+-    build_aes(&circuits_dir);
+-    build_sha2(&circuits_dir);
+-    build_blake3();
+-    build_keccak(&circuits_dir);
++    let output = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
++    build_aes(&circuits_dir, &output);
++    build_sha2(&circuits_dir, &output);
++    build_blake3(&output);
++    build_keccak(&circuits_dir, &output);
+ }
+
+-fn build_aes(circuits_dir: &Path) {
++fn build_aes(circuits_dir: &Path, output: &Path) {
+     let path = circuits_dir.join("aes_128_reverse.txt");
+     let circ = Circuit::parse(path.as_path().to_str().unwrap()).unwrap();
+
+     let bytes = bincode::serialize(&circ).unwrap();
+-    write(Path::new("data/aes_128.bin"), bytes).unwrap();
++    write(output.join("aes_128.bin"), bytes).unwrap();
+
+     let path = circuits_dir.join("aes_128_key_schedule.txt");
+     let circ = Circuit::parse(path.as_path().to_str().unwrap()).unwrap();
+
+     let bytes = bincode::serialize(&circ).unwrap();
+-    write(Path::new("data/aes_128_ks.bin"), bytes).unwrap();
++    write(output.join("aes_128_ks.bin"), bytes).unwrap();
+
+     let path = circuits_dir.join("aes_128_post_key_schedule.txt");
+     let circ = Circuit::parse(path.as_path().to_str().unwrap()).unwrap();
+
+     let bytes = bincode::serialize(&circ).unwrap();
+-    write(Path::new("data/aes_128_post_ks.bin"), bytes).unwrap();
++    write(output.join("aes_128_post_ks.bin"), bytes).unwrap();
+ }
+
+-fn build_sha2(circuits_dir: &Path) {
++fn build_sha2(circuits_dir: &Path, output: &Path) {
+     let path = circuits_dir.join("sha256_reverse.txt");
+     let circ = Circuit::parse(path.as_path().to_str().unwrap()).unwrap();
+
+     let bytes = bincode::serialize(&circ).unwrap();
+-    write(Path::new("data/sha256.bin"), bytes).unwrap();
++    write(output.join("sha256.bin"), bytes).unwrap();
+ }
+
+-fn build_blake3() {
++fn build_blake3(output: &Path) {
+     let circ = mpz_circuits_core::circuits::blake3::compress();
+
+     let bytes = bincode::serialize(&circ).unwrap();
+-    write(Path::new("data/blake3.bin"), bytes).unwrap();
++    write(output.join("blake3.bin"), bytes).unwrap();
+ }
+
+-fn build_keccak(circuits_dir: &Path) {
++fn build_keccak(circuits_dir: &Path, output: &Path) {
+     let path = circuits_dir.join("keccak_f.txt");
+     let circ = Circuit::parse(path.as_path().to_str().unwrap()).unwrap();
+
+     let bytes = bincode::serialize(&circ).unwrap();
+-    write(Path::new("data/keccak_f.bin"), bytes).unwrap();
++    write(output.join("keccak_f.bin"), bytes).unwrap();
+ }
+diff --git a/crates/circuits-data/src/lib.rs b/crates/circuits-data/src/lib.rs
+--- a/crates/circuits-data/src/lib.rs
++++ b/crates/circuits-data/src/lib.rs
+@@ -11,7 +11,7 @@
+ /// `fn(key: [u8; 16], msg: [u8; 16]) -> [u8; 16]`
+ #[cfg(feature = "aes")]
+ pub static AES128: Lazy<Arc<Circuit>> = Lazy::new(|| {
+-    let bytes = include_bytes!("../data/aes_128.bin");
++    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/aes_128.bin"));
+     Arc::new(bincode::deserialize(bytes).unwrap())
+ });
+
+@@ -24,7 +24,7 @@
+ /// The output is the key schedule: 11 round keys, 16 bytes each.
+ #[cfg(feature = "aes")]
+ pub static AES128_KS: Lazy<Arc<Circuit>> = Lazy::new(|| {
+-    let bytes = include_bytes!("../data/aes_128_ks.bin");
++    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/aes_128_ks.bin"));
+     Arc::new(bincode::deserialize(bytes).unwrap())
+ });
+
+@@ -37,7 +37,7 @@
+ /// `key_schedule` is 11 round keys, 16 bytes each.
+ #[cfg(feature = "aes")]
+ pub static AES128_POST_KS: Lazy<Arc<Circuit>> = Lazy::new(|| {
+-    let bytes = include_bytes!("../data/aes_128_post_ks.bin");
++    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/aes_128_post_ks.bin"));
+     Arc::new(bincode::deserialize(bytes).unwrap())
+ });
+
+@@ -48,7 +48,7 @@
+ /// `fn(msg: [u8; 64], state: [u32; 8]) -> [u32; 8]`
+ #[cfg(feature = "sha2")]
+ pub static SHA256_COMPRESS: Lazy<Arc<Circuit>> = Lazy::new(|| {
+-    let bytes = include_bytes!("../data/sha256.bin");
++    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/sha256.bin"));
+     Arc::new(bincode::deserialize(bytes).unwrap())
+ });
+
+@@ -59,7 +59,7 @@
+ /// `fn(msg: [u32; 16], state: [u32; 16]) -> [u32; 16]`
+ #[cfg(feature = "blake3")]
+ pub static BLAKE3_COMPRESS: Lazy<Arc<Circuit>> = Lazy::new(|| {
+-    let bytes = include_bytes!("../data/blake3.bin");
++    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/blake3.bin"));
+     Arc::new(bincode::deserialize(bytes).unwrap())
+ });
+
+@@ -70,7 +70,7 @@
+ /// `fn(state: [u64; 25]) -> [u64; 25]`
+ #[cfg(feature = "keccak")]
+ pub static KECCAK_PERMUTE: Lazy<Arc<Circuit>> = Lazy::new(|| {
+-    let bytes = include_bytes!("../data/keccak_f.bin");
++    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/keccak_f.bin"));
+     Arc::new(bincode::deserialize(bytes).unwrap())
+ });
+
+diff --git a/crates/common/Cargo.toml b/crates/common/Cargo.toml
+--- a/crates/common/Cargo.toml
++++ b/crates/common/Cargo.toml
+@@ -21,7 +21,7 @@
+ serde = { workspace = true, features = ["derive"] }
+ pollster.workspace = true
+ cfg-if.workspace = true
+-tokio = { workspace = true, optional = true }
++tokio = { workspace = true, features = ["sync"] }
+ tokio-util = { workspace = true }
+ crossbeam-channel = { workspace = true }
+ crossbeam-deque = { workspace = true }
+diff --git a/crates/common/src/context.rs b/crates/common/src/context.rs
+--- a/crates/common/src/context.rs
++++ b/crates/common/src/context.rs
+@@ -250,8 +250,8 @@
+         // Interleave lane outputs back into input order: lane `l`'s j-th
+         // result corresponds to original index `l + j * lanes`, the mirror
+         // of how items were scattered into lanes above.
+-        let mut iters: Vec<_> = future::join_all(tasks)
+-            .await
++        let mut iters: Vec<_> = future::try_join_all(tasks)
++            .await?
+             .into_iter()
+             .map(Vec::into_iter)
+             .collect();
+@@ -283,7 +283,7 @@
+
+         let task_a = run(pool.as_ref(), async move { a(&mut ctx_a).await });
+         let task_b = run(pool.as_ref(), async move { b(&mut ctx_b).await });
+-        Ok(future::join(task_a, task_b).await)
++        future::try_join(task_a, task_b).await
+     }
+
+     /// Like [`Context::join`], but short-circuits as soon as either branch
+@@ -314,9 +314,9 @@
+         let mut ctx_a = self.child(parent_id.child(0))?;
+         let mut ctx_b = self.child(parent_id.child(1))?;
+
+-        let task_a = run(pool.as_ref(), async move { a(&mut ctx_a).await });
+-        let task_b = run(pool.as_ref(), async move { b(&mut ctx_b).await });
+-        Ok(future::try_join(task_a, task_b).await)
++        let task_a = try_run(pool.as_ref(), async move { a(&mut ctx_a).await });
++        let task_b = try_run(pool.as_ref(), async move { b(&mut ctx_b).await });
++        context_result(future::try_join(task_a, task_b).await)
+     }
+
+     /// Same as [`Context::try_join`], but with three branches.
+@@ -351,10 +351,10 @@
+         let mut ctx_b = self.child(parent_id.child(1))?;
+         let mut ctx_c = self.child(parent_id.child(2))?;
+
+-        let task_a = run(pool.as_ref(), async move { a(&mut ctx_a).await });
+-        let task_b = run(pool.as_ref(), async move { b(&mut ctx_b).await });
+-        let task_c = run(pool.as_ref(), async move { c(&mut ctx_c).await });
+-        Ok(future::try_join3(task_a, task_b, task_c).await)
++        let task_a = try_run(pool.as_ref(), async move { a(&mut ctx_a).await });
++        let task_b = try_run(pool.as_ref(), async move { b(&mut ctx_b).await });
++        let task_c = try_run(pool.as_ref(), async move { c(&mut ctx_c).await });
++        context_result(future::try_join3(task_a, task_b, task_c).await)
+     }
+
+     /// Same as [`Context::try_join`], but with four branches.
+@@ -394,11 +394,11 @@
+         let mut ctx_c = self.child(parent_id.child(2))?;
+         let mut ctx_d = self.child(parent_id.child(3))?;
+
+-        let task_a = run(pool.as_ref(), async move { a(&mut ctx_a).await });
+-        let task_b = run(pool.as_ref(), async move { b(&mut ctx_b).await });
+-        let task_c = run(pool.as_ref(), async move { c(&mut ctx_c).await });
+-        let task_d = run(pool.as_ref(), async move { d(&mut ctx_d).await });
+-        Ok(future::try_join4(task_a, task_b, task_c, task_d).await)
++        let task_a = try_run(pool.as_ref(), async move { a(&mut ctx_a).await });
++        let task_b = try_run(pool.as_ref(), async move { b(&mut ctx_b).await });
++        let task_c = try_run(pool.as_ref(), async move { c(&mut ctx_c).await });
++        let task_d = try_run(pool.as_ref(), async move { d(&mut ctx_d).await });
++        context_result(future::try_join4(task_a, task_b, task_c, task_d).await)
+     }
+
+     fn pool(&self) -> Option<&ThreadPool> {
+@@ -410,29 +410,66 @@
+     }
+ }
+
+-/// Spawns `fut` on `pool` if one is provided, otherwise yields the future
+-/// as-is. The output type is identical either way.
+-fn run<F>(pool: Option<&ThreadPool>, fut: F) -> impl std::future::Future<Output = F::Output> + Send
++async fn run<F>(pool: Option<&ThreadPool>, fut: F) -> Result<F::Output, ContextError>
+ where
+     F: std::future::Future + Send + 'static,
+     F::Output: Send + 'static,
+ {
+     match pool {
+-        Some(pool) => Either::Left(crate::thread_pool::spawn_on(pool, fut)),
+-        None => Either::Right(fut),
++        Some(pool) => {
++            let task = crate::thread_pool::spawn_on(pool, fut).fallible();
++            let cancelled = Box::pin(pool.cancelled());
++            match future::select(cancelled, task).await {
++                Either::Left((Ok(()) | Err(_), task)) => {
++                    drop(task);
++                    Err(ContextError::Cancelled)
++                }
++                Either::Right((value, _)) => value.ok_or(ContextError::Cancelled),
++            }
++        }
++        None => Ok(fut.await),
++    }
++}
++
++async fn try_run<F, T, E>(
++    pool: Option<&ThreadPool>,
++    fut: F,
++) -> Result<T, Either<ContextError, E>>
++where
++    F: std::future::Future<Output = Result<T, E>> + Send + 'static,
++    T: Send + 'static,
++    E: Send + 'static,
++{
++    match run(pool, fut).await {
++        Ok(Ok(value)) => Ok(value),
++        Ok(Err(error)) => Err(Either::Right(error)),
++        Err(error) => Err(Either::Left(error)),
++    }
++}
++
++fn context_result<T, E>(
++    result: Result<T, Either<ContextError, E>>,
++) -> Result<Result<T, E>, ContextError> {
++    match result {
++        Ok(value) => Ok(Ok(value)),
++        Err(Either::Right(error)) => Ok(Err(error)),
++        Err(Either::Left(error)) => Err(error),
+     }
+ }
+
+ /// Error for [`Context`].
+ #[derive(Debug, thiserror::Error)]
+-#[error("context mux error: {source}")]
+-pub struct ContextError {
+-    #[source]
+-    source: std::io::Error,
++pub enum ContextError {
++    /// Opening a context channel failed.
++    #[error("context mux error")]
++    Mux(#[source] std::io::Error),
++    /// The pool cancelled a task.
++    #[error("context task cancelled")]
++    Cancelled,
+ }
+
+ impl ContextError {
+     fn mux(source: std::io::Error) -> Self {
+-        Self { source }
+-    }
+-}
++        Self::Mux(source)
++    }
++}
+diff --git a/crates/common/src/session.rs b/crates/common/src/session.rs
+--- a/crates/common/src/session.rs
++++ b/crates/common/src/session.rs
+@@ -161,6 +161,12 @@
+     /// Each context produced by a session is given a distinct ID under the
+     /// session's configured prefix.
+     pub fn new_context(&self) -> Result<Context, std::io::Error> {
++        if self.pool.as_ref().is_some_and(ThreadPool::is_shutdown) {
++            return Err(std::io::Error::new(
++                std::io::ErrorKind::Interrupted,
++                "session pool shut down",
++            ));
++        }
+         let index = self.next_context.fetch_add(1, Ordering::Relaxed);
+         let id = self.prefix.child(index);
+         let io = self.mux.open(id.as_ref())?;
+diff --git a/crates/common/src/thread_pool.rs b/crates/common/src/thread_pool.rs
+--- a/crates/common/src/thread_pool.rs
++++ b/crates/common/src/thread_pool.rs
+@@ -13,6 +13,7 @@
+ use async_task::{Runnable, Task};
+ use crossbeam_deque::{Injector, Steal, Stealer, Worker};
+ use crossbeam_utils::sync::{Parker, Unparker};
++use tokio::sync::watch;
+
+ /// A shared handle to a thread pool.
+ ///
+@@ -56,26 +57,25 @@
+     injector: Injector<Runnable>,
+     stealers: Vec<Stealer<Runnable>>,
+     workers: Box<[WorkerState]>,
+-    shutdown: AtomicBool,
++    shutdown: watch::Sender<bool>,
+ }
+
+ impl Inner {
+     fn shutdown(&self) {
+-        self.shutdown.store(true, Ordering::SeqCst);
+-
+-        // Drain the injector before unparking workers. Any push that races
+-        // with this drain is handled by the shutdown check in the schedule
+-        // callback (see `spawn_on`), which drops the runnable.
++        self.shutdown.send_replace(true);
++        self.drain();
++        for w in self.workers.iter() {
++            w.unparker.unpark();
++        }
++    }
++
++    fn drain(&self) {
+         loop {
+             match self.injector.steal() {
+                 Steal::Success(_) => continue,
+                 Steal::Empty => break,
+                 Steal::Retry => continue,
+             }
+-        }
+-
+-        for w in self.workers.iter() {
+-            w.unparker.unpark();
+         }
+     }
+ }
+@@ -226,7 +226,16 @@
+
+     /// Returns `true` if the pool has been shut down.
+     pub fn is_shutdown(&self) -> bool {
+-        self.inner.shutdown.load(Ordering::SeqCst)
++        *self.inner.shutdown.borrow()
++    }
++
++    pub(crate) async fn cancelled(&self) -> Result<(), watch::error::RecvError> {
++        self.inner
++            .shutdown
++            .subscribe()
++            .wait_for(|shutdown| *shutdown)
++            .await?;
++        Ok(())
+     }
+
+     fn new(num_threads: usize, spawn: &SpawnFn) -> Result<ThreadPool, ThreadPoolBuildError> {
+@@ -250,7 +259,7 @@
+             injector,
+             stealers,
+             workers,
+-            shutdown: AtomicBool::new(false),
++            shutdown: watch::channel(false).0,
+         });
+
+         for (index, (local, parker)) in worker_queues.into_iter().zip(parkers).enumerate() {
+@@ -284,7 +293,7 @@
+         while local.pop().is_some() {}
+     };
+
+-    while !inner.shutdown.load(Ordering::Relaxed) {
++    while !*inner.shutdown.borrow() {
+         if let Some(runnable) = find_task(&inner, &local, index) {
+             runnable.run();
+             continue;
+@@ -303,7 +312,7 @@
+             continue;
+         }
+
+-        if inner.shutdown.load(Ordering::Relaxed) {
++        if *inner.shutdown.borrow() {
+             state.parked.store(false, Ordering::SeqCst);
+             break;
+         }
+@@ -354,16 +363,12 @@
+ {
+     let inner = pool.inner.clone();
+     let schedule = move |runnable: Runnable| {
+-        // After shutdown, no worker will run this. Dropping the runnable
+-        // cancels the task so the awaiter doesn't hang. SeqCst pairs with
+-        // the SeqCst store in `Inner::shutdown` to ensure that any push
+-        // that "loses" the race is then drained by shutdown's pass over
+-        // the injector.
+-        if inner.shutdown.load(Ordering::SeqCst) {
+-            drop(runnable);
++        inner.injector.push(runnable);
++        // Recheck after enqueue so shutdown cannot miss a late push.
++        if *inner.shutdown.borrow() {
++            inner.drain();
+             return;
+         }
+-        inner.injector.push(runnable);
+         // Scan for an idle worker and claim it for this notification. The
+         // `load` is a cheap filter; the `compare_exchange` is what makes the
+         // claim race-free against other concurrent producers. Stops at the

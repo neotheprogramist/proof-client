@@ -1,0 +1,67 @@
+[patch.crates-io]
+p3-batch-stark = { path = "vendor/Plonky3/batch-stark" }
+p3-air = { path = "vendor/Plonky3/air" }
+p3-baby-bear = { path = "vendor/Plonky3/baby-bear" }
+p3-challenger = { path = "vendor/Plonky3/challenger" }
+p3-circle = { path = "vendor/Plonky3/circle" }
+p3-commit = { path = "vendor/Plonky3/commit" }
+p3-dft = { path = "vendor/Plonky3/dft" }
+p3-field = { path = "vendor/Plonky3/field" }
+p3-fri = { path = "vendor/Plonky3/fri" }
+p3-goldilocks = { path = "vendor/Plonky3/goldilocks" }
+p3-keccak = { path = "vendor/Plonky3/keccak" }
+p3-koala-bear = { path = "vendor/Plonky3/koala-bear" }
+p3-lookup = { path = "vendor/Plonky3/lookup" }
+p3-matrix = { path = "vendor/Plonky3/matrix" }
+p3-maybe-rayon = { path = "vendor/Plonky3/maybe-rayon" }
+p3-mds = { path = "vendor/Plonky3/mds" }
+p3-merkle-tree = { path = "vendor/Plonky3/merkle-tree" }
+p3-monty-31 = { path = "vendor/Plonky3/monty-31" }
+p3-multilinear-util = { path = "vendor/Plonky3/multilinear-util" }
+p3-poseidon1 = { path = "vendor/Plonky3/poseidon1" }
+p3-poseidon1-air = { path = "vendor/Plonky3/poseidon1-air" }
+p3-poseidon2 = { path = "vendor/Plonky3/poseidon2" }
+p3-poseidon2-air = { path = "vendor/Plonky3/poseidon2-air" }
+p3-security = { path = "vendor/Plonky3/security" }
+p3-sumcheck = { path = "vendor/Plonky3/sumcheck" }
+p3-symmetric = { path = "vendor/Plonky3/symmetric" }
+p3-uni-stark = { path = "vendor/Plonky3/uni-stark" }
+p3-util = { path = "vendor/Plonky3/util" }
+p3-zk-codes = { path = "vendor/Plonky3/zk-codes" }
+p3-whir = { path = "vendor/Plonky3/whir" }
+
+[patch."https://github.com/Plonky3/Plonky3-recursion"]
+p3-circuit = { path = "vendor/Plonky3-recursion/circuit" }
+p3-circuit-prover = { path = "vendor/Plonky3-recursion/circuit-prover" }
+p3-poseidon-circuit-cols = { path = "vendor/Plonky3-recursion/poseidon-circuit-cols" }
+p3-poseidon1-circuit-air = { path = "vendor/Plonky3-recursion/poseidon1-circuit-air" }
+p3-poseidon2-circuit-air = { path = "vendor/Plonky3-recursion/poseidon2-circuit-air" }
+p3-recursion = { path = "vendor/Plonky3-recursion/recursion" }
+
+[patch."https://github.com/tlsnotary/mpz2"]
+mpz-core = { path = "vendor/mpz/crates/core" }
+mpz-common = { path = "vendor/mpz/crates/common" }
+mpz-fields = { path = "vendor/mpz/crates/fields" }
+mpz-circuits = { path = "vendor/mpz/crates/circuits" }
+mpz-circuits-core = { path = "vendor/mpz/crates/circuits-core" }
+mpz-circuits-data = { path = "vendor/mpz/crates/circuits-data" }
+mpz-cointoss = { path = "vendor/mpz/crates/cointoss" }
+mpz-cointoss-core = { path = "vendor/mpz/crates/cointoss-core" }
+mpz-ot = { path = "vendor/mpz/crates/ot" }
+mpz-ot-core = { path = "vendor/mpz/crates/ot-core" }
+mpz-garble = { path = "vendor/mpz/crates/garble" }
+mpz-garble-core = { path = "vendor/mpz/crates/garble-core" }
+mpz-hash = { path = "vendor/mpz/crates/hash" }
+mpz-ideal-vm = { path = "vendor/mpz/crates/ideal-vm" }
+mpz-share-conversion-core = { path = "vendor/mpz/crates/share-conversion-core" }
+mpz-ole = { path = "vendor/mpz/crates/ole" }
+mpz-ole-core = { path = "vendor/mpz/crates/ole-core" }
+mpz-memory-core = { path = "vendor/mpz/crates/memory-core" }
+mpz-vm-core = { path = "vendor/mpz/crates/vm-core" }
+mpz-zk-core = { path = "vendor/mpz/crates/zk-core" }
+mpz-zk = { path = "vendor/mpz/crates/zk" }
+clmul = { path = "vendor/mpz/crates/clmul" }
+matrix-transpose = { path = "vendor/mpz/crates/matrix-transpose" }
+
+[patch."https://github.com/tlsnotary/tlsn"]
+tlsn = { path = "vendor/tlsn/crates/tlsn" }

@@ -1,0 +1,47 @@
+diff --git a/circuit-prover/src/batch_stark_prover.rs b/circuit-prover/src/batch_stark_prover.rs
+--- a/circuit-prover/src/batch_stark_prover.rs
++++ b/circuit-prover/src/batch_stark_prover.rs
+@@ -771,6 +771,11 @@
+     /// The exact relation fixed by this preparation.
+     pub const fn relation(&self) -> &CircuitRelation<Val<SC>> {
+         &self.relation
++    }
++
++    /// Share prepared proving data; verifier authority remains independent.
++    pub fn prover_data(&self) -> Arc<CircuitProverData<SC>> {
++        Arc::clone(&self.circuit_prover_data)
+     }
+
+     /// Export a cheap, independently owned verifier handle.
+diff --git a/circuit/src/builder/compiler/optimizer/dedup.rs b/circuit/src/builder/compiler/optimizer/dedup.rs
+--- a/circuit/src/builder/compiler/optimizer/dedup.rs
++++ b/circuit/src/builder/compiler/optimizer/dedup.rs
+@@ -47,6 +47,10 @@
+             result.push(op);
+         }
+
++        // Earlier operations can read a witness whose producer was deduplicated later.
++        for op in &mut result {
++            op.apply_witness_rewrite(&self.rewrite);
++        }
+         (result, self.rewrite)
+     }
+
+diff --git a/recursion/src/types/proof.rs b/recursion/src/types/proof.rs
+--- a/recursion/src/types/proof.rs
++++ b/recursion/src/types/proof.rs
+@@ -155,6 +155,14 @@
+     pub lookups: Vec<Vec<Lookup<Val<SC>>>>,
+ }
+
++impl<SC: StarkGenericConfig, Comm> CommonDataTargets<SC, Comm> {
++    /// The exact key targets consumed by this recursive verifier. Callers must bind them
++    /// to independently trusted authority, directly or through a checked family relation.
++    pub fn preprocessed_commitment(&self) -> Option<&Comm> {
++        self.preprocessed.as_ref().map(|preprocessed| &preprocessed.commitment)
++    }
++}
++
+ impl<SC: StarkGenericConfig, Comm> Recursive<SC::Challenge> for CommonDataTargets<SC, Comm>
+ where
+     Comm: Recursive<

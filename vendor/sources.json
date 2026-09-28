@@ -1,0 +1,60 @@
+[
+  {
+    "name": "Plonky3",
+    "repository": "https://github.com/Plonky3/Plonky3",
+    "commit": "a21e3ed42905040ad49c519e402f018381c12d0c",
+    "base": "63042d283b9e524a6b4cf08e78370b2430998722be1f00e5aeb770adabd9c883",
+    "tree": "aaa4becb74441715441b187ed2464a3e1ec5dd8cbbd4e92cf20b0a5b3cb9c939",
+    "patch": "44b7c4d9b179e377007e76ba534a0c1d7535c817771da1004e710fbb8ab31db7",
+    "executables": ["create_release.sh", "scripts/check.py", "scripts/test_check.py"],
+    "archive": "https://codeload.github.com/Plonky3/Plonky3/tar.gz/a21e3ed42905040ad49c519e402f018381c12d0c",
+    "sha256": "6a1e50d97da281b7f21f4f3962b39e9b6a8a197a3b94c4470171ae05d7a34db8"
+  },
+  {
+    "name": "Plonky3-recursion",
+    "repository": "https://github.com/Plonky3/Plonky3-recursion",
+    "commit": "8f9876efb26cff0f4b837555b478f043c4314240",
+    "base": "2eabd9c0817dd5fe89ab4857cae57930a8acb482348105d319effc6ea8f391d7",
+    "tree": "8b79062922d82be2d33f71bbd57f9abbb6ed5fab3f3ae94feab11b7f98f50925",
+    "patch": "5d8df1c517e55500ca295df8b3a63fccd695bc35b7c4157fb493cc018cff6338",
+    "executables": ["create_release.sh"],
+    "archive": "https://codeload.github.com/Plonky3/Plonky3-recursion/tar.gz/8f9876efb26cff0f4b837555b478f043c4314240",
+    "sha256": "d0988e4eb7ec38d8c7580316855275392c987e4494a0795d680e50665912d1c0"
+  },
+  {
+    "name": "mpz",
+    "repository": "https://github.com/tlsnotary/mpz2",
+    "commit": "eaca5f9d9f30167c9525716e8f0aa9e33d886e5e",
+    "base": "31095415811a3e1567cbf8dda5898b7abff7c0abba362d1a5205f1a630a84d5a",
+    "tree": "09f5d3e060a5da97d78b81671b4a7c5afe426d3dae9c11a57778544271b235d4",
+    "patch": "0e74ed4aab4cc1b214430b996af2a7cd3efc8a2b4f6b2e3ed4ba584f069f25bc",
+    "executables": [
+      "crates/wasm-bench/build-wasm.sh",
+      "pre-commit-check.sh",
+      "scripts/wasm-runner.sh"
+    ],
+    "archive": "https://codeload.github.com/tlsnotary/mpz2/tar.gz/eaca5f9d9f30167c9525716e8f0aa9e33d886e5e",
+    "sha256": "4932a032623c62f36b69a3730c991896b59443fec7c32013d6987320975a6917"
+  },
+  {
+    "name": "tlsn",
+    "repository": "https://github.com/tlsnotary/tlsn",
+    "commit": "47aee45b53e06648c1b2ad3689b367b8c923fdec",
+    "base": "e3fb22089c6903c17a010618bb33753589e98044d8bbb2fb5cad1cc1985ad161",
+    "tree": "7c595889560f2871e298458f249818ba06c57ace01f3336adf0df59144a9cd1b",
+    "patch": "562feeaa0938f20384a9d63c2070af4e48248ea8a51d83ca496b5d4d3490cfdb",
+    "executables": [
+      ".github/workflows/bench-commit.sh",
+      "crates/attestation/tests/fixtures/generate_presentation_fixture.rs",
+      "crates/examples-zk/noir/generate_test_data.rs",
+      "crates/harness/build.runner.dev.sh",
+      "crates/harness/build.sh",
+      "crates/harness/build.wasm.sh",
+      "crates/tls/client/test-ca/build-a-pki.sh",
+      "crates/wasm/build-docs.sh",
+      "crates/wasm/build.sh",
+      "pre-commit-check.sh",
+      "set_tlsn_version.rs"
+    ]
+  }
+]

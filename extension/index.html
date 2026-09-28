@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Proof Client</title>
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="page.mjs"></script>
+  </head>
+  <body>
+    <main>
+      <h1>Proof Client</h1>
+      <p>
+        Local circuits and live HTTPS disclosure. Enter absolute file paths on the native host.
+        Output files must not exist.
+      </p>
+      <section>
+        <h2>Prove / verify</h2>
+        <p>
+          Verification checks the proof against the trusted circuit and your expected public input.
+        </p>
+        <div class="forms">
+          <form id="prove">
+            <fieldset>
+              <legend>Prove</legend>
+              <label for="prove-circuit">Circuit path</label
+              ><input id="prove-circuit" name="circuit" type="text" required />
+              <label for="prove-witness">Witness path</label
+              ><input id="prove-witness" name="witness" type="text" required />
+              <label for="prove-output">New proof path</label
+              ><input id="prove-output" name="output" type="text" required />
+              <label for="prove-public">Public input JSON path</label
+              ><input id="prove-public" name="public" type="text" required />
+              <label for="prove-threads">Threads (optional)</label
+              ><input id="prove-threads" name="threads" type="number" min="1" step="1" />
+              <button type="submit">Prove</button>
+            </fieldset>
+            <button type="button" disabled>Cancel</button><output aria-live="polite"></output>
+          </form>
+          <form id="verify">
+            <fieldset>
+              <legend>Verify</legend>
+              <label for="verify-circuit">Trusted circuit path</label
+              ><input id="verify-circuit" name="circuit" type="text" required />
+              <label for="verify-proof">Proof path</label
+              ><input id="verify-proof" name="proof" type="text" required />
+              <label for="verify-public">Public input JSON path</label
+              ><input id="verify-public" name="public" type="text" required />
+              <label for="verify-threads">Threads (optional)</label
+              ><input id="verify-threads" name="threads" type="number" min="1" step="1" />
+              <button type="submit">Verify</button>
+            </fieldset>
+            <button type="button" disabled>Cancel</button><output aria-live="polite"></output>
+          </form>
+        </div>
+      </section>
+      <section>
+        <h2>Serve / attest</h2>
+        <p>
+          Start Serve, wait for Ready, then run Attest using its address. The verifier receives
+          selected bytes and transcript lengths; Attest displays the private response and saves
+          private commitment openings in metadata.
+        </p>
+        <div class="forms">
+          <form id="serve">
+            <fieldset>
+              <legend>Serve</legend>
+              <label for="serve-listen">Listen address, e.g. 127.0.0.1:7047</label
+              ><input id="serve-listen" name="listen" type="text" />
+              <label for="serve-cert">Verifier certificate path</label
+              ><input id="serve-cert" name="cert" type="text" />
+              <label for="serve-key">Verifier key path</label
+              ><input id="serve-key" name="key" type="text" />
+              <label for="serve-server-name">Expected target DNS name</label
+              ><input id="serve-server-name" name="server-name" type="text" required />
+              <label for="serve-target-ca">Target CA path (optional)</label
+              ><input id="serve-target-ca" name="target-ca" type="text" />
+
+              <label for="serve-data-dir">Absolute data directory</label
+              ><input id="serve-data-dir" name="data-dir" type="text" required />
+              <button type="submit">Serve</button>
+            </fieldset>
+            <button type="button" disabled>Cancel</button><output aria-live="polite"></output>
+          </form>
+          <form id="attest">
+            <fieldset>
+              <legend>Attest</legend>
+              <label for="attest-request-args">Request arguments as a JSON array</label>
+              <textarea id="attest-request-args" name="request-args" required>
+["--url", "https://localhost:7443/balance", "--data-raw", "{}"]</textarea>
+              <label for="attest-disclosure">Disclosure JSON path (omitted: hide everything)</label
+              ><input id="attest-disclosure" name="disclosure" type="text" />
+              <label for="attest-verifier">Verifier address, e.g. 127.0.0.1:7047</label
+              ><input id="attest-verifier" name="verifier" type="text" />
+              <label for="attest-verifier-name"
+                >Verifier certificate DNS name (default: localhost)</label
+              ><input id="attest-verifier-name" name="verifier-name" type="text" />
+              <label for="attest-verifier-ca">Verifier CA path (defaults to local identity)</label
+              ><input id="attest-verifier-ca" name="verifier-ca" type="text" />
+              <label for="attest-target-ca">Target CA path (optional)</label
+              ><input id="attest-target-ca" name="target-ca" type="text" />
+
+              <label for="attest-data-dir">Absolute data directory</label
+              ><input id="attest-data-dir" name="data-dir" type="text" required />
+              <button type="submit">Attest</button>
+            </fieldset>
+            <button type="button" disabled>Cancel</button><output aria-live="polite"></output>
+          </form>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

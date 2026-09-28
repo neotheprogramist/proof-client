@@ -1,0 +1,32 @@
+{
+  "reveal": {
+    "sent": [
+      "start_line",
+      {
+        "header": "content-type"
+      }
+    ],
+    "received": [
+      "start_line",
+      {
+        "header": "content-length"
+      },
+      {
+        "json": "/products/0/AvailableBalance"
+      },
+      {
+        "json": "/products/0/currency"
+      },
+      {
+        "json_key": "/products/0/account"
+      }
+    ]
+  },
+  "commit": {
+    "received": [
+      {
+        "json_value": "/products/0/account"
+      }
+    ]
+  }
+}

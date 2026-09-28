@@ -1,0 +1,576 @@
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -58,7 +58,7 @@
+ tlsn-hmac-sha256 = { path = "crates/components/hmac-sha256" }
+ tlsn-key-exchange = { path = "crates/components/key-exchange" }
+ tlsn-mpc-tls = { path = "crates/mpc-tls" }
+-tlsn-mux = { git = "https://github.com/tlsnotary/tlsn-utils", rev = "64722f7" }
++tlsn-mux = { git = "https://github.com/tlsnotary/tlsn-utils", rev = "67aab0bced6950530f960d89d866405e4557bd02" }
+ tlsn-server-fixture = { path = "crates/server-fixture/server" }
+ tlsn-server-fixture-certs = { path = "crates/server-fixture/certs" }
+ tlsn-tls-client = { path = "crates/tls/client" }
+@@ -71,21 +71,21 @@
+ tlsn-wasm = { path = "crates/wasm" }
+ tlsn = { path = "crates/tlsn" }
+
+-mpz-circuits = { git = "https://github.com/privacy-ethereum/mpz", rev = "v0.1.0-alpha.6" }
+-mpz-circuits-data = { git = "https://github.com/privacy-ethereum/mpz", rev = "v0.1.0-alpha.6" }
+-mpz-memory-core = { git = "https://github.com/privacy-ethereum/mpz", rev = "v0.1.0-alpha.6" }
+-mpz-common = { git = "https://github.com/privacy-ethereum/mpz", rev = "v0.1.0-alpha.6" }
+-mpz-core = { git = "https://github.com/privacy-ethereum/mpz", rev = "v0.1.0-alpha.6" }
+-mpz-vm-core = { git = "https://github.com/privacy-ethereum/mpz", rev = "v0.1.0-alpha.6" }
+-mpz-garble = { git = "https://github.com/privacy-ethereum/mpz", rev = "v0.1.0-alpha.6" }
+-mpz-garble-core = { git = "https://github.com/privacy-ethereum/mpz", rev = "v0.1.0-alpha.6" }
+-mpz-ole = { git = "https://github.com/privacy-ethereum/mpz", rev = "v0.1.0-alpha.6" }
+-mpz-ot = { git = "https://github.com/privacy-ethereum/mpz", rev = "v0.1.0-alpha.6" }
+-mpz-share-conversion = { git = "https://github.com/privacy-ethereum/mpz", rev = "v0.1.0-alpha.6" }
+-mpz-fields = { git = "https://github.com/privacy-ethereum/mpz", rev = "v0.1.0-alpha.6" }
+-mpz-zk = { git = "https://github.com/privacy-ethereum/mpz", rev = "v0.1.0-alpha.6" }
+-mpz-hash = { git = "https://github.com/privacy-ethereum/mpz", rev = "v0.1.0-alpha.6", default-features = false }
+-mpz-ideal-vm = { git = "https://github.com/privacy-ethereum/mpz", rev = "v0.1.0-alpha.6" }
++mpz-circuits = { git = "https://github.com/tlsnotary/mpz2", rev = "eaca5f9d9f30167c9525716e8f0aa9e33d886e5e" }
++mpz-circuits-data = { git = "https://github.com/tlsnotary/mpz2", rev = "eaca5f9d9f30167c9525716e8f0aa9e33d886e5e" }
++mpz-memory-core = { git = "https://github.com/tlsnotary/mpz2", rev = "eaca5f9d9f30167c9525716e8f0aa9e33d886e5e" }
++mpz-common = { git = "https://github.com/tlsnotary/mpz2", rev = "eaca5f9d9f30167c9525716e8f0aa9e33d886e5e" }
++mpz-core = { git = "https://github.com/tlsnotary/mpz2", rev = "eaca5f9d9f30167c9525716e8f0aa9e33d886e5e" }
++mpz-vm-core = { git = "https://github.com/tlsnotary/mpz2", rev = "eaca5f9d9f30167c9525716e8f0aa9e33d886e5e" }
++mpz-garble = { git = "https://github.com/tlsnotary/mpz2", rev = "eaca5f9d9f30167c9525716e8f0aa9e33d886e5e" }
++mpz-garble-core = { git = "https://github.com/tlsnotary/mpz2", rev = "eaca5f9d9f30167c9525716e8f0aa9e33d886e5e" }
++mpz-ole = { git = "https://github.com/tlsnotary/mpz2", rev = "eaca5f9d9f30167c9525716e8f0aa9e33d886e5e" }
++mpz-ot = { git = "https://github.com/tlsnotary/mpz2", rev = "eaca5f9d9f30167c9525716e8f0aa9e33d886e5e" }
++mpz-share-conversion = { git = "https://github.com/tlsnotary/mpz2", rev = "eaca5f9d9f30167c9525716e8f0aa9e33d886e5e" }
++mpz-fields = { git = "https://github.com/tlsnotary/mpz2", rev = "eaca5f9d9f30167c9525716e8f0aa9e33d886e5e" }
++mpz-zk = { git = "https://github.com/tlsnotary/mpz2", rev = "eaca5f9d9f30167c9525716e8f0aa9e33d886e5e" }
++mpz-hash = { git = "https://github.com/tlsnotary/mpz2", rev = "eaca5f9d9f30167c9525716e8f0aa9e33d886e5e", default-features = false }
++mpz-ideal-vm = { git = "https://github.com/tlsnotary/mpz2", rev = "eaca5f9d9f30167c9525716e8f0aa9e33d886e5e" }
+
+ futures-plex = { git = "https://github.com/tlsnotary/tlsn-utils", rev = "64722f7" }
+ rangeset = { version = "0.4" }
+@@ -138,6 +138,8 @@
+ pin-project-lite = { version = "0.2" }
+ pollster = { version = "0.4" }
+ rand = { version = "0.9" }
++# MPZ requires rand 0.10; TLS primitives still use rand 0.9.
++rand_mpz = { package = "rand", version = "0.10" }
+ rand_chacha = { version = "0.9" }
+ rand_core = { version = "0.9" }
+ rand06-compat = { version = "0.1" }
+diff --git a/crates/components/key-exchange/Cargo.toml b/crates/components/key-exchange/Cargo.toml
+--- a/crates/components/key-exchange/Cargo.toml
++++ b/crates/components/key-exchange/Cargo.toml
+@@ -38,6 +38,7 @@
+ tokio = { workspace = true, features = ["sync"] }
+
+ [dev-dependencies]
++rand_mpz = { workspace = true }
+ mpz-ot = { workspace = true, features = ["ideal"] }
+ mpz-garble = { workspace = true }
+ mpz-ideal-vm = { workspace = true }
+diff --git a/crates/components/key-exchange/src/exchange.rs b/crates/components/key-exchange/src/exchange.rs
+--- a/crates/components/key-exchange/src/exchange.rs
++++ b/crates/components/key-exchange/src/exchange.rs
+@@ -477,6 +477,7 @@
+     use p256::{NonZeroScalar, PublicKey, SecretKey};
+     use rand::rngs::StdRng;
+     use rand_core::SeedableRng;
++    use rand_mpz::SeedableRng as _;
+     use rstest::*;
+
+     impl<C0, C1> MpcKeyExchange<C0, C1> {
+@@ -660,7 +661,7 @@
+         let client_public_key = leader.client_key().unwrap();
+         assert_eq!(client_public_key, expected_client_public_key);
+
+-        let bad_pms_share = P256::rand(&mut rng);
++        let bad_pms_share = P256::rand(&mut rand_mpz::rngs::StdRng::seed_from_u64(0));
+
+         let (leader_err, follower_err) = tokio::join!(
+             async {
+diff --git a/crates/examples-zk/prover.rs b/crates/examples-zk/prover.rs
+--- a/crates/examples-zk/prover.rs
++++ b/crates/examples-zk/prover.rs
+@@ -67,7 +67,7 @@
+         .host();
+
+     // Create a session with the verifier.
+-    let session = Session::new(verifier_socket.compat());
++    let session = Session::new(verifier_socket.compat())?;
+     let (driver, mut handle) = session.split();
+
+     // Spawn the session driver to run in the background.
+diff --git a/crates/examples-zk/verifier.rs b/crates/examples-zk/verifier.rs
+--- a/crates/examples-zk/verifier.rs
++++ b/crates/examples-zk/verifier.rs
+@@ -28,7 +28,7 @@
+     socket: T,
+ ) -> Result<PartialTranscript> {
+     // Create a session with the prover.
+-    let session = Session::new(socket.compat());
++    let session = Session::new(socket.compat())?;
+     let (driver, mut handle) = session.split();
+
+     // Spawn the session driver to run in the background.
+diff --git a/crates/examples/attestation/prove.rs b/crates/examples/attestation/prove.rs
+--- a/crates/examples/attestation/prove.rs
++++ b/crates/examples/attestation/prove.rs
+@@ -79,7 +79,7 @@
+         .unwrap_or(DEFAULT_FIXTURE_PORT);
+
+     // Create a session with the notary.
+-    let session = Session::new(socket.compat());
++    let session = Session::new(socket.compat())?;
+     let (driver, mut handle) = session.split();
+
+     // Spawn the session driver to run in the background.
+@@ -282,7 +282,7 @@
+     socket: S,
+ ) -> Result<()> {
+     // Create a session with the prover.
+-    let session = Session::new(socket.compat());
++    let session = Session::new(socket.compat())?;
+     let (driver, mut handle) = session.split();
+
+     // Spawn the session driver to run in the background.
+diff --git a/crates/examples/basic/basic.rs b/crates/examples/basic/basic.rs
+--- a/crates/examples/basic/basic.rs
++++ b/crates/examples/basic/basic.rs
+@@ -76,7 +76,7 @@
+     let server_domain = uri.authority().unwrap().host();
+
+     // Create a session with the verifier.
+-    let session = Session::new(verifier_socket.compat());
++    let session = Session::new(verifier_socket.compat())?;
+     let (driver, mut handle) = session.split();
+
+     // Spawn the session driver to run in the background.
+@@ -185,7 +185,7 @@
+     socket: T,
+ ) -> Result<PartialTranscript> {
+     // Create a session with the prover.
+-    let session = Session::new(socket.compat());
++    let session = Session::new(socket.compat())?;
+     let (driver, mut handle) = session.split();
+
+     // Spawn the session driver to run in the background.
+diff --git a/crates/examples/proxy/proxy.rs b/crates/examples/proxy/proxy.rs
+--- a/crates/examples/proxy/proxy.rs
++++ b/crates/examples/proxy/proxy.rs
+@@ -71,7 +71,7 @@
+     let server_domain = uri.authority().unwrap().host();
+
+     // Create a session with the verifier.
+-    let session = Session::new(verifier_socket.compat());
++    let session = Session::new(verifier_socket.compat())?;
+     let (driver, mut handle) = session.split();
+
+     // Spawn the session driver to run in the background.
+@@ -176,7 +176,7 @@
+     server_addr: SocketAddr,
+ ) -> Result<PartialTranscript> {
+     // Create a session with the prover.
+-    let session = Session::new(prover_socket.compat());
++    let session = Session::new(prover_socket.compat())?;
+     let (driver, mut handle) = session.split();
+
+     // Spawn the session driver to run in the background.
+diff --git a/crates/harness/executor/src/bench/prover.rs b/crates/harness/executor/src/bench/prover.rs
+--- a/crates/harness/executor/src/bench/prover.rs
++++ b/crates/harness/executor/src/bench/prover.rs
+@@ -29,7 +29,7 @@
+     let sent = verifier_io.sent();
+     let recv = verifier_io.recv();
+
+-    let mut session = Session::new(verifier_io);
++    let mut session = Session::new(verifier_io)?;
+
+     let prover = session.new_prover(ProverConfig::builder().build()?)?;
+     let (session, handle) = session.split();
+diff --git a/crates/harness/executor/src/bench/verifier.rs b/crates/harness/executor/src/bench/verifier.rs
+--- a/crates/harness/executor/src/bench/verifier.rs
++++ b/crates/harness/executor/src/bench/verifier.rs
+@@ -13,7 +13,7 @@
+
+ pub async fn bench_verifier(provider: &IoProvider, _config: &Bench) -> Result<()> {
+     let io = provider.provide_proto_io().await?;
+-    let mut session = Session::new(io);
++    let mut session = Session::new(io)?;
+
+     let verifier = session.new_verifier(
+         VerifierConfig::builder()
+diff --git a/crates/harness/executor/test_plugins/basic.rs b/crates/harness/executor/test_plugins/basic.rs
+--- a/crates/harness/executor/test_plugins/basic.rs
++++ b/crates/harness/executor/test_plugins/basic.rs
+@@ -34,7 +34,7 @@
+
+ async fn prover_mpc(provider: &IoProvider) {
+     let io = provider.provide_proto_io().await.unwrap();
+-    let mut session = Session::new(io);
++    let mut session = Session::new(io).unwrap();
+     let prover = session
+         .new_prover(ProverConfig::builder().build().unwrap())
+         .unwrap();
+@@ -65,7 +65,7 @@
+
+ async fn prover_proxy(provider: &IoProvider) {
+     let io = provider.provide_proto_io().await.unwrap();
+-    let mut session = Session::new(io);
++    let mut session = Session::new(io).unwrap();
+     let prover = session
+         .new_prover(ProverConfig::builder().build().unwrap())
+         .unwrap();
+@@ -167,7 +167,7 @@
+
+ async fn verifier(provider: &IoProvider) {
+     let io = provider.provide_proto_io().await.unwrap();
+-    let mut session = Session::new(io);
++    let mut session = Session::new(io).unwrap();
+
+     let config = VerifierConfig::builder()
+         .root_store(RootCertStore {
+diff --git a/crates/mpc-tls/Cargo.toml b/crates/mpc-tls/Cargo.toml
+--- a/crates/mpc-tls/Cargo.toml
++++ b/crates/mpc-tls/Cargo.toml
+@@ -45,6 +45,7 @@
+ thiserror = { workspace = true }
+ tracing = { workspace = true }
+ rand = { workspace = true }
++rand_mpz = { workspace = true }
+ opaque-debug = { workspace = true }
+ aes = { workspace = true }
+ aes-gcm = { workspace = true }
+diff --git a/crates/mpc-tls/src/follower.rs b/crates/mpc-tls/src/follower.rs
+--- a/crates/mpc-tls/src/follower.rs
++++ b/crates/mpc-tls/src/follower.rs
+@@ -53,7 +53,7 @@
+         CS: RCOTSender<Block> + Flush + Send + Sync + 'static,
+         CR: RCOTReceiver<bool, Block> + Flush + Send + Sync + 'static,
+     {
+-        let mut rng = rand::rng();
++        let mut rng = rand_mpz::rng();
+
+         let ke = Box::new(MpcKeyExchange::new(
+             key_exchange::Role::Follower,
+diff --git a/crates/mpc-tls/src/leader.rs b/crates/mpc-tls/src/leader.rs
+--- a/crates/mpc-tls/src/leader.rs
++++ b/crates/mpc-tls/src/leader.rs
+@@ -74,7 +74,7 @@
+         CS: RCOTSender<Block> + Flush + Send + Sync + 'static,
+         CR: RCOTReceiver<bool, Block> + Flush + Send + Sync + 'static,
+     {
+-        let mut rng = rand::rng();
++        let mut rng = rand_mpz::rng();
+
+         let ke = Box::new(MpcKeyExchange::new(
+             key_exchange::Role::Leader,
+diff --git a/crates/mpc-tls/src/record_layer/aead/aes_gcm.rs b/crates/mpc-tls/src/record_layer/aead/aes_gcm.rs
+--- a/crates/mpc-tls/src/record_layer/aead/aes_gcm.rs
++++ b/crates/mpc-tls/src/record_layer/aead/aes_gcm.rs
+@@ -459,7 +459,7 @@
+     use mpz_ideal_vm::IdealVm;
+     use mpz_memory_core::binary::U8;
+     use mpz_share_conversion::ideal::ideal_share_convert;
+-    use rand::{SeedableRng, rngs::StdRng};
++    use rand_mpz::{SeedableRng, rngs::StdRng};
+     use rstest::*;
+
+     static SHORT_MSG: &[u8] = b"hello world";
+diff --git a/crates/mpc-tls/src/record_layer/aead/ghash.rs b/crates/mpc-tls/src/record_layer/aead/ghash.rs
+--- a/crates/mpc-tls/src/record_layer/aead/ghash.rs
++++ b/crates/mpc-tls/src/record_layer/aead/ghash.rs
+@@ -346,7 +346,7 @@
+     use mpz_share_conversion::ideal::{
+         IdealShareConvertReceiver, IdealShareConvertSender, ideal_share_convert,
+     };
+-    use rand::{Rng, SeedableRng, rngs::StdRng};
++    use rand_mpz::{RngExt, SeedableRng, rngs::StdRng};
+
+     fn create_pair() -> (
+         MpcGhash<IdealShareConvertSender<Gf2_128>>,
+diff --git a/crates/sdk-core/src/prover.rs b/crates/sdk-core/src/prover.rs
+--- a/crates/sdk-core/src/prover.rs
++++ b/crates/sdk-core/src/prover.rs
+@@ -111,7 +111,7 @@
+
+         info!("connecting to verifier");
+
+-        let session = Session::new(verifier_io);
++        let session = Session::new(verifier_io)?;
+         let (driver, mut handle) = session.split();
+
+         crate::spawn::spawn(async move {
+diff --git a/crates/sdk-core/src/verifier.rs b/crates/sdk-core/src/verifier.rs
+--- a/crates/sdk-core/src/verifier.rs
++++ b/crates/sdk-core/src/verifier.rs
+@@ -92,7 +92,7 @@
+
+         info!("connecting to prover");
+
+-        let session = Session::new(prover_io);
++        let session = Session::new(prover_io)?;
+         let (driver, mut handle) = session.split();
+
+         crate::spawn::spawn(async move {
+diff --git a/crates/tlsn/Cargo.toml b/crates/tlsn/Cargo.toml
+--- a/crates/tlsn/Cargo.toml
++++ b/crates/tlsn/Cargo.toml
+@@ -52,6 +52,7 @@
+ opaque-debug = { workspace = true }
+ pin-project-lite = { workspace = true }
+ rand = { workspace = true }
++rand_mpz = { workspace = true }
+ rustls-pki-types = { workspace = true }
+ rustls-webpki = { workspace = true }
+ thiserror = { workspace = true }
+diff --git a/crates/tlsn/src/deps/prover.rs b/crates/tlsn/src/deps/prover.rs
+--- a/crates/tlsn/src/deps/prover.rs
++++ b/crates/tlsn/src/deps/prover.rs
+@@ -27,7 +27,7 @@
+         use mpz_garble::protocol::semihonest::Garbler;
+         use mpz_ot::cot::DerandCOTSender;
+         use mpz_zk::Prover;
+-        use rand::Rng;
++        use rand_mpz::RngExt;
+
+         pub(crate) type ProverMpc =
+             Garbler<DerandCOTSender<SharedRCOTSender<kos::Sender<co::Receiver>, Block>>>;
+@@ -51,7 +51,7 @@
+
+ impl ProverMpcDeps {
+     pub(crate) fn new(config: &MpcTlsConfig, ctx: Context) -> Self {
+-        let mut rng = rand::rng();
++        let mut rng = rand_mpz::rng();
+         let delta = Delta::new(Block::random(&mut rng));
+
+         let base_ot_send = co::Sender::default();
+@@ -142,7 +142,7 @@
+         let vm = cfg_select! {
+             tlsn_insecure => { mpz_ideal_vm::IdealVm::new() }
+             _ => {{
+-                let mut rng = rand::rng();
++                let mut rng = rand_mpz::rng();
+
+                 let base_ot_send = co::Sender::default();
+                 let rcot_recv = kos::Receiver::new(kos::ReceiverConfig::default(), base_ot_send);
+diff --git a/crates/tlsn/src/deps/verifier.rs b/crates/tlsn/src/deps/verifier.rs
+--- a/crates/tlsn/src/deps/verifier.rs
++++ b/crates/tlsn/src/deps/verifier.rs
+@@ -51,7 +51,7 @@
+
+ impl VerifierMpcDeps {
+     pub(crate) fn new(config: &MpcTlsConfig, ctx: Context) -> Self {
+-        let mut rng = rand::rng();
++        let mut rng = rand_mpz::rng();
+
+         let delta = Delta::random(&mut rng);
+         let base_ot_send = co::Sender::default();
+@@ -140,7 +140,7 @@
+         let vm = cfg_select! {
+             tlsn_insecure => { mpz_ideal_vm::IdealVm::new() }
+             _ => {{
+-                let mut rng = rand::rng();
++                let mut rng = rand_mpz::rng();
+                 let delta = Delta::random(&mut rng);
+
+                 let base_ot_recv = co::Receiver::default();
+diff --git a/crates/tlsn/src/error.rs b/crates/tlsn/src/error.rs
+--- a/crates/tlsn/src/error.rs
++++ b/crates/tlsn/src/error.rs
+@@ -162,3 +162,11 @@
+         matches!(self, ErrorKind::Config)
+     }
+ }
++
++impl From<mpz_common::ThreadPoolBuildError> for Error {
++    fn from(source: mpz_common::ThreadPoolBuildError) -> Self {
++        Self::io()
++            .with_msg("failed to start session workers")
++            .with_source(source)
++    }
++}
+diff --git a/crates/tlsn/src/session.rs b/crates/tlsn/src/session.rs
+--- a/crates/tlsn/src/session.rs
++++ b/crates/tlsn/src/session.rs
+@@ -9,7 +9,7 @@
+ };
+
+ use futures::{AsyncRead, AsyncWrite};
+-use mpz_common::{Executor, io::Io, mux::Mux};
++use mpz_common::{ThreadPool, io::Io, mux::Mux};
+ use tlsn_core::config::{prover::ProverConfig, verifier::VerifierConfig};
+ use tlsn_mux::{Connection, Handle};
+
+@@ -37,7 +37,7 @@
+ #[must_use = "session must be polled continuously to make progress, including during closing."]
+ pub struct Session<Io> {
+     conn: Option<Connection<Io>>,
+-    executor: Executor,
++    workers: SessionWorkers,
+     handle: Handle,
+ }
+
+@@ -46,7 +46,7 @@
+     Io: AsyncRead + AsyncWrite + Unpin,
+ {
+     /// Creates a new session.
+-    pub fn new(io: Io) -> Self {
++    pub fn new(io: Io) -> Result<Self> {
+         let mut mux_config = tlsn_mux::Config::default();
+
+         mux_config.set_keep_alive(true);
+@@ -54,15 +54,15 @@
+
+         let conn = tlsn_mux::Connection::new(io, mux_config);
+         let handle = conn.handle().expect("handle should be available");
+-        let executor = build_executor(MuxHandle {
++        let workers = build_workers(MuxHandle {
+             handle: handle.clone(),
+-        });
+-
+-        Self {
++        })?;
++
++        Ok(Self {
+             conn: Some(conn),
+-            executor,
++            workers,
+             handle,
+-        }
++        })
+     }
+
+     /// Creates a new prover.
+@@ -70,7 +70,7 @@
+         &mut self,
+         config: ProverConfig,
+     ) -> Result<Prover<prover_state::Initialized>> {
+-        let ctx = self.executor.new_context().map_err(|e| {
++        let ctx = self.workers.session.new_context().map_err(|e| {
+             Error::internal()
+                 .with_msg("failed to create new prover")
+                 .with_source(e)
+@@ -84,7 +84,7 @@
+         &mut self,
+         config: VerifierConfig,
+     ) -> Result<Verifier<verifier_state::Initialized>> {
+-        let ctx = self.executor.new_context().map_err(|e| {
++        let ctx = self.workers.session.new_context().map_err(|e| {
+             Error::internal()
+                 .with_msg("failed to create new verifier")
+                 .with_source(e)
+@@ -158,7 +158,7 @@
+                 waker: waker.clone(),
+             },
+             SessionHandle {
+-                executor: self.executor,
++                workers: self.workers,
+                 should_close,
+                 waker,
+                 handle: self.handle,
+@@ -243,7 +243,7 @@
+ ///
+ /// Used to create provers/verifiers and control the session lifecycle.
+ pub struct SessionHandle {
+-    executor: Executor,
++    workers: SessionWorkers,
+     should_close: Arc<AtomicBool>,
+     waker: Arc<Mutex<Option<Waker>>>,
+     handle: Handle,
+@@ -255,7 +255,7 @@
+         &mut self,
+         config: ProverConfig,
+     ) -> Result<Prover<prover_state::Initialized>> {
+-        let ctx = self.executor.new_context().map_err(|e| {
++        let ctx = self.workers.session.new_context().map_err(|e| {
+             Error::internal()
+                 .with_msg("failed to create new prover")
+                 .with_source(e)
+@@ -269,7 +269,7 @@
+         &mut self,
+         config: VerifierConfig,
+     ) -> Result<Verifier<verifier_state::Initialized>> {
+-        let ctx = self.executor.new_context().map_err(|e| {
++        let ctx = self.workers.session.new_context().map_err(|e| {
+             Error::internal()
+                 .with_msg("failed to create new verifier")
+                 .with_source(e)
+@@ -309,21 +309,33 @@
+     }
+ }
+
+-/// Builds a work-stealing executor with the given muxer.
+-fn build_executor(mux: MuxHandle) -> Executor {
++struct SessionWorkers {
++    session: mpz_common::Session,
++    pool: ThreadPool,
++}
++
++impl Drop for SessionWorkers {
++    fn drop(&mut self) {
++        self.pool.shutdown();
++    }
++}
++
++fn build_workers(mux: MuxHandle) -> Result<SessionWorkers> {
+     #[cfg(all(feature = "web", target_arch = "wasm32"))]
+     let cores = web_spawn::available_parallelism().map(|n| n.get());
+
+     #[cfg(not(all(feature = "web", target_arch = "wasm32")))]
+     let cores = std::thread::available_parallelism().map(|n| n.get());
+
+-    let builder = Executor::builder().num_threads(cores.unwrap_or(8));
++    let builder = ThreadPool::builder().num_threads(cores?);
+
+     #[cfg(all(feature = "web", target_arch = "wasm32"))]
+     let builder = builder.spawn(|f| {
+-        let _ = web_spawn::spawn(f);
++        drop(web_spawn::spawn(f));
+         Ok(())
+     });
+
+-    builder.build(mux)
+-}
++    let pool = builder.build()?;
++    let session = mpz_common::Session::builder().pool(pool.clone()).build(mux)?;
++    Ok(SessionWorkers { session, pool })
++}
+diff --git a/crates/tlsn/src/transcript_internal/auth.rs b/crates/tlsn/src/transcript_internal/auth.rs
+--- a/crates/tlsn/src/transcript_internal/auth.rs
++++ b/crates/tlsn/src/transcript_internal/auth.rs
+@@ -92,6 +92,11 @@
+     reveal: &RangeSet<usize>,
+     commit: &RangeSet<usize>,
+ ) -> Result<(ReferenceMap, PlaintextProof<'a>), PlaintextAuthError> {
++    if reveal.end().is_some_and(|end| end > plaintext.len())
++        || commit.end().is_some_and(|end| end > plaintext.len())
++    {
++        return Err(ErrorRepr::OutOfBounds.into());
++    }
+     let is_reveal_all = reveal == (0..plaintext.len());
+
+     let alloc_ranges = if is_reveal_all {
+diff --git a/crates/tlsn/tests/test.rs b/crates/tlsn/tests/test.rs
+--- a/crates/tlsn/tests/test.rs
++++ b/crates/tlsn/tests/test.rs
+@@ -43,8 +43,8 @@
+         .unwrap();
+
+     let (prover_socket, verifier_socket) = tokio::io::duplex(2 << 23);
+-    let mut session_p = Session::new(prover_socket.compat());
+-    let mut session_v = Session::new(verifier_socket.compat());
++    let mut session_p = Session::new(prover_socket.compat()).unwrap();
++    let mut session_v = Session::new(verifier_socket.compat()).unwrap();
+
+     let prover = session_p
+         .new_prover(ProverConfig::builder().build().unwrap())
+@@ -110,8 +110,8 @@
+         .unwrap();
+
+     let (prover_socket, verifier_socket) = tokio::io::duplex(2 << 23);
+-    let mut session_p = Session::new(prover_socket.compat());
+-    let mut session_v = Session::new(verifier_socket.compat());
++    let mut session_p = Session::new(prover_socket.compat()).unwrap();
++    let mut session_v = Session::new(verifier_socket.compat()).unwrap();
+
+     let prover = session_p
+         .new_prover(ProverConfig::builder().build().unwrap())

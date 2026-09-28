@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "checkJs": true,
+    "target": "esnext",
+    "lib": ["esnext", "dom", "dom.iterable"],
+    "maxNodeModuleJsDepth": 0,
+    "types": ["chrome", "node"]
+  },
+  "include": ["extension/**/*.mjs", "tests/*.mjs"]
+}

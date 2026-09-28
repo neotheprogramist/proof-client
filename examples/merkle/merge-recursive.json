@@ -1,0 +1,98 @@
+{
+  "format": "proof-client/circuit/4",
+  "inputs": {
+    "public": 25,
+    "private": 0
+  },
+  "operations": [
+    {
+      "op": "verify",
+      "verifier": "merge-verifier.json",
+      "proof": 0,
+      "circuit_id_wires": [9, 10, 11, 12, 13, 14, 15, 16]
+    },
+    {
+      "op": "verify",
+      "verifier": "merge-verifier.json",
+      "proof": 1,
+      "circuit_id_wires": [9, 10, 11, 12, 13, 14, 15, 16]
+    },
+    {
+      "op": "poseidon2",
+      "tag": 1347223810,
+      "inputs": [26, 27, 28, 29, 30, 31, 32, 33, 51, 52, 53, 54, 55, 56, 57, 58]
+    },
+    {
+      "op": "constant",
+      "value": 1
+    },
+    {
+      "op": "add",
+      "left": 25,
+      "right": 83
+    }
+  ],
+  "constraints": [
+    {
+      "op": "equal",
+      "left": 0,
+      "right": 84
+    },
+    {
+      "op": "equal",
+      "left": 1,
+      "right": 75
+    },
+    {
+      "op": "equal",
+      "left": 2,
+      "right": 76
+    },
+    {
+      "op": "equal",
+      "left": 3,
+      "right": 77
+    },
+    {
+      "op": "equal",
+      "left": 4,
+      "right": 78
+    },
+    {
+      "op": "equal",
+      "left": 5,
+      "right": 79
+    },
+    {
+      "op": "equal",
+      "left": 6,
+      "right": 80
+    },
+    {
+      "op": "equal",
+      "left": 7,
+      "right": 81
+    },
+    {
+      "op": "equal",
+      "left": 8,
+      "right": 82
+    },
+    {
+      "op": "equal",
+      "left": 25,
+      "right": 50
+    },
+    {
+      "op": "bits",
+      "wire": 0,
+      "bits": 16
+    },
+    {
+      "op": "bits",
+      "wire": 25,
+      "bits": 16
+    }
+  ],
+  "verifier_set": "merge-verifier.json"
+}
