@@ -30,6 +30,10 @@ const DEFAULT_COMMITMENT_KINDS: &[TranscriptCommitmentKind] = &[
     TranscriptCommitmentKind::Hash {
         alg: HashAlgId::KECCAK256,
     },
+    #[cfg(feature = "hash-poseidon2-koalabear")]
+    TranscriptCommitmentKind::Hash {
+        alg: HashAlgId::POSEIDON2_KOALABEAR_16_PAD10_V1,
+    },
 ];
 
 /// Proof of the contents of a transcript.

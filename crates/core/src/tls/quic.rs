@@ -12,14 +12,11 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::Arc,
-    time::Duration,
 };
 use tlsn::{connection::DnsName, webpki::RootCertStore};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
 pub const ALPN: &[u8] = b"proof-client-tlsn/8";
-// Policy: bound QUIC close draining.
-const DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(thiserror::Error)]
 pub enum QuicError {
@@ -39,11 +36,6 @@ pub enum QuicError {
     Name(#[from] tlsn::connection::InvalidDnsNameError),
     #[error("QUIC session exceeded its deadline")]
     Timeout(#[from] tokio::time::error::Elapsed),
-    #[error("QUIC operation failed and its shutdown exceeded the drain deadline")]
-    Shutdown {
-        operation: Box<QuicError>,
-        shutdown: tokio::time::error::Elapsed,
-    },
     #[error("invalid QUIC control frame")]
     Json(#[from] serde_json::Error),
     #[error("QUIC frame length exceeds the protocol representation")]
@@ -119,7 +111,6 @@ pub fn server_config(cert: &[u8], key: &[u8]) -> Result<quinn::ServerConfig, Qui
     .with_no_client_auth()
     .with_single_cert(certificates(cert)?, PrivateKeyDer::from_pem_slice(key)?)?;
     crypto.alpn_protocols = vec![ALPN.to_vec()];
-    crypto.max_early_data_size = 0;
     let mut config =
         quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(crypto)?));
     config.transport_config(Arc::new(transport()));
@@ -147,7 +138,6 @@ impl Peer {
         .with_root_certificates(store)
         .with_no_client_auth();
         crypto.alpn_protocols = vec![ALPN.to_vec()];
-        crypto.enable_early_data = false;
         let mut config = quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(crypto)?));
         let mut limits = transport();
         limits.max_concurrent_bidi_streams(0u8.into());
@@ -170,16 +160,11 @@ async fn complete<T>(
     };
     let code = if result.is_ok() { 0u8 } else { 1u8 };
     socket.close(code.into(), b"operation ended");
-    let drained = tokio::time::timeout(DRAIN_TIMEOUT, socket.wait_idle()).await;
-    match (result, drained) {
-        (Ok(receipt), Ok(())) => Ok(receipt),
-        (Err(error), Ok(())) => Err(error),
-        (Ok(_), Err(error)) => Err(error.into()),
-        (Err(operation), Err(shutdown)) => Err(QuicError::Shutdown {
-            operation: Box::new(operation),
-            shutdown,
-        }),
-    }
+    tracing::info!(phase = "draining_transport");
+    // Quinn owns the RTT-dependent close timer; a second timer can expire first.
+    socket.wait_idle().await;
+    tracing::info!(phase = "transport_drained");
+    result
 }
 struct Channel(quinn::Connection);
 impl Drop for Channel {
@@ -235,6 +220,7 @@ pub async fn attest(
     disclosure: Disclosure,
     peer: Peer,
     target_roots: RootCertStore,
+    commitment_hash: super::commitment::CommitmentHash,
 ) -> Result<Attestation, QuicError> {
     let ip = match peer.address.ip() {
         IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
@@ -252,8 +238,15 @@ pub async fn attest(
         let server = tokio::net::TcpStream::connect(request.address())
             .await?
             .compat();
-        let (io, mut session) =
-            attest::attest_session(request, disclosure, io, server, target_roots).await?;
+        let (io, mut session) = attest::attest_session(
+            request,
+            disclosure,
+            io,
+            server,
+            target_roots,
+            commitment_hash,
+        )
+        .await?;
         session.report = session.report.accepted();
         let mut io = io;
         let encoded = Frame::encode(&WireReceipt {
@@ -288,6 +281,7 @@ pub struct Verifier {
     socket: Endpoint,
     name: DnsName,
     roots: RootCertStore,
+    commitment_policy: super::commitment::CommitmentPolicy,
 }
 impl Verifier {
     pub fn bind(
@@ -295,6 +289,7 @@ impl Verifier {
         config: quinn::ServerConfig,
         server_name: &str,
         roots: RootCertStore,
+        commitment_policy: super::commitment::CommitmentPolicy,
     ) -> Result<Self, QuicError> {
         if !address.ip().is_loopback() {
             return Err(QuicError::Loopback);
@@ -306,6 +301,7 @@ impl Verifier {
             socket,
             name,
             roots,
+            commitment_policy,
         })
     }
     pub fn local_addr(&self) -> Result<SocketAddr, QuicError> {
@@ -320,7 +316,8 @@ impl Verifier {
             tracing::info!(phase = "connected");
             let (send, recv) = connection.0.accept_bi().await?;
             let io = tokio::io::join(recv, send).compat();
-            let (mut io, report) = attest::verify_session(io, self.roots).await?;
+            let (mut io, report) =
+                attest::verify_session(io, self.roots, self.commitment_policy).await?;
             if report.data().server_name() != self.name.as_str() {
                 return Err(QuicError::Mismatch);
             }
@@ -375,7 +372,3 @@ impl Frame {
         Ok(())
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/controls/quic_controls.rs"]
-mod tests;

@@ -26,8 +26,8 @@
     "repository": "https://github.com/tlsnotary/mpz2",
     "commit": "eaca5f9d9f30167c9525716e8f0aa9e33d886e5e",
     "base": "31095415811a3e1567cbf8dda5898b7abff7c0abba362d1a5205f1a630a84d5a",
-    "tree": "09f5d3e060a5da97d78b81671b4a7c5afe426d3dae9c11a57778544271b235d4",
-    "patch": "0e74ed4aab4cc1b214430b996af2a7cd3efc8a2b4f6b2e3ed4ba584f069f25bc",
+    "tree": "1a43faa1c9a9801648508f7571fef55164bd5bcc2d1584606f4155c341af6bae",
+    "patch": "4d0159a6db59bb6a910ee85dbd449cce9f4bcc1b092521154b3ab86672e6bc7b",
     "executables": [
       "crates/wasm-bench/build-wasm.sh",
       "pre-commit-check.sh",
@@ -41,8 +41,8 @@
     "repository": "https://github.com/tlsnotary/tlsn",
     "commit": "47aee45b53e06648c1b2ad3689b367b8c923fdec",
     "base": "e3fb22089c6903c17a010618bb33753589e98044d8bbb2fb5cad1cc1985ad161",
-    "tree": "7c595889560f2871e298458f249818ba06c57ace01f3336adf0df59144a9cd1b",
-    "patch": "562feeaa0938f20384a9d63c2070af4e48248ea8a51d83ca496b5d4d3490cfdb",
+    "tree": "0bce5b7e3624714d61ebfd2fe773f0765dec9dbe813bdcaec1ce48b60bfec9d7",
+    "patch": "e833925f641519fd9d85b288a769cfb35dbb65210c020ed2d2c4df6566cc5425",
     "executables": [
       ".github/workflows/bench-commit.sh",
       "crates/attestation/tests/fixtures/generate_presentation_fixture.rs",

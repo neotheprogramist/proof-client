@@ -4,7 +4,12 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use proof_client_core::{
     proof::{self as prover, Artifact, Job, PublicInput},
-    tls::{attest, disclosure::Disclosure, quic},
+    tls::{
+        attest,
+        commitment::{CommitmentHash, CommitmentPolicy},
+        disclosure::Disclosure,
+        quic,
+    },
 };
 use serde_json::{Value, json};
 // Policy: bound local certificate and disclosure documents independently of network framing.
@@ -116,6 +121,12 @@ pub enum Command {
     },
     /// Accept one live TLSN disclosure for the expected HTTPS target.
     Serve {
+        /// Admit only this commitment hash; peers must select the same suite.
+        #[arg(long, default_value_t = CommitmentHash::default())]
+        commitment_hash: CommitmentHash,
+        /// Required for KoalaBear: total permutation budget per session.
+        #[arg(long)]
+        max_commitment_permutations: Option<NonZeroUsize>,
         /// Local QUIC listener; accepts one attestation.
         #[arg(long, default_value = VERIFIER_ADDRESS)]
         listen: SocketAddr,
@@ -184,6 +195,9 @@ impl Command {
 
 #[derive(Args)]
 pub struct Attest {
+    /// Hash each committed selection using this suite.
+    #[arg(long, default_value_t = CommitmentHash::default())]
+    commitment_hash: CommitmentHash,
     #[command(flatten)]
     request: crate::request::RequestArgs,
     /// Reveal/commit policy; omitted means reveal nothing and commit nothing.
@@ -429,7 +443,13 @@ pub fn execute(
             server_name,
             target_ca,
             metadata_output,
+            commitment_hash,
+            max_commitment_permutations,
         } => {
+            let policy = match CommitmentPolicy::new(commitment_hash, max_commitment_permutations) {
+                Ok(policy) => policy,
+                Err(error) => return Err(attest::AttestError::from(error).into()),
+            };
             let cert = cert.unwrap_or_else(|| storage.data_dir.join(VERIFIER_CERTIFICATE));
             let key = key.unwrap_or_else(|| storage.data_dir.join("identity/verifier.key"));
             let metadata =
@@ -440,9 +460,9 @@ pub fn execute(
                 &read(&key, MAX_LOCAL_INPUT_BYTES)?,
             )?;
             let roots = quic::roots(pem(target_ca.as_deref())?.as_deref())?;
-            tracing::info!(phase = "inputs_parsed", expected_target = ?server_name);
+            tracing::info!(phase = "inputs_parsed", expected_target = ?server_name, commitment_hash = %commitment_hash, ?max_commitment_permutations);
             let receipt = runtime()?.block_on(async {
-                let verifier = quic::Verifier::bind(listen, config, &server_name, roots)?;
+                let verifier = quic::Verifier::bind(listen, config, &server_name, roots, policy)?;
                 ready(verifier.local_addr()?)?;
                 Ok::<_, CliError>(verifier.verify().await?)
             })?;
@@ -480,7 +500,14 @@ pub fn attest(args: Attest, storage: &Storage) -> Result<(quic::Attestation, Str
     )?;
     let roots = quic::roots(pem(args.target_ca.as_deref())?.as_deref())?;
     tracing::info!(phase = "inputs_parsed", verifier = %args.verifier, verifier_name = ?args.verifier_name, target = ?request.server_name(), method = %request.method(), action = "send new HTTPS request");
-    let artifact = runtime()?.block_on(quic::attest(request, disclosure, peer, roots))?;
+    tracing::info!(commitment_hash = %args.commitment_hash);
+    let artifact = runtime()?.block_on(quic::attest(
+        request,
+        disclosure,
+        peer,
+        roots,
+        args.commitment_hash,
+    ))?;
     metadata.publish(&artifact.metadata())?;
     Ok((artifact, metadata_output))
 }

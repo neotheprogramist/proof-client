@@ -1,4 +1,4 @@
-use super::attest::{self, AttestError, Segment};
+use super::attest::{AttestError, MAX_RECEIVED, MAX_SENT, Segment};
 use serde::{Deserialize, Serialize};
 use tlsn::transcript::{Direction, Transcript, hash::PlaintextHash};
 
@@ -23,24 +23,28 @@ impl Evidence {
         &self.commitments
     }
     pub fn redacted(&self) -> Result<Transcript, AttestError> {
-        Ok(Transcript::new(
-            attest::redacted(
+        let [sent, received] = self.display_bytes()?;
+        Ok(Transcript::new(render(sent), render(received)))
+    }
+    fn display_bytes(&self) -> Result<[Vec<DisplayByte>; 2], AttestError> {
+        Ok([
+            display_bytes(
                 self.sent_len,
                 &self.sent,
                 self.commitments
                     .iter()
                     .filter(|c| c.direction == Direction::Sent),
-                attest::MAX_SENT,
+                MAX_SENT,
             )?,
-            attest::redacted(
+            display_bytes(
                 self.received_len,
                 &self.received,
                 self.commitments
                     .iter()
                     .filter(|c| c.direction == Direction::Received),
-                attest::MAX_RECEIVED,
+                MAX_RECEIVED,
             )?,
-        ))
+        ])
     }
     pub fn sent(&self) -> impl Iterator<Item = (usize, &[u8])> {
         self.sent.iter().map(|s| (s.start, s.bytes.as_slice()))
@@ -102,29 +106,7 @@ impl Record {
             sent,
             received,
         };
-        if evidence
-            .sent
-            .iter()
-            .chain(&evidence.received)
-            .any(|segment| segment.bytes.is_empty())
-        {
-            return Err(AttestError::Transcript.into());
-        }
-        evidence.redacted()?;
-        let mut occupied = std::collections::HashSet::new();
-        for commitment in &evidence.commitments {
-            for range in commitment.idx.iter() {
-                let direction = match commitment.direction {
-                    Direction::Sent => 0,
-                    Direction::Received => 1,
-                };
-                for offset in range {
-                    if !occupied.insert((direction, offset)) {
-                        return Err(AttestError::Transcript.into());
-                    }
-                }
-            }
-        }
+        evidence.display_bytes()?;
         let evidence = if complete {
             RecordedEvidence::Complete(evidence)
         } else {
@@ -140,4 +122,68 @@ impl Record {
             selections: wire.selections,
         })
     }
+}
+
+// Policy: distinguish undisclosed bytes from authenticated hash commitments in text views.
+const HIDDEN_BYTE: &str = "🙈";
+const COMMITTED_BYTE: &str = "🔒";
+
+#[derive(Clone, Copy)]
+enum DisplayByte {
+    Hidden,
+    Committed,
+    Disclosed(u8),
+}
+
+fn display_bytes<'a>(
+    length: usize,
+    segments: &[Segment],
+    commitments: impl Iterator<Item = &'a PlaintextHash>,
+    limit: usize,
+) -> Result<Vec<DisplayByte>, AttestError> {
+    if length > limit {
+        return Err(AttestError::Transcript);
+    }
+    let mut bytes = vec![DisplayByte::Hidden; length];
+    for commitment in commitments {
+        for range in commitment.idx.iter() {
+            for byte in bytes.get_mut(range).ok_or(AttestError::Transcript)? {
+                if !matches!(byte, DisplayByte::Hidden) {
+                    return Err(AttestError::Transcript);
+                }
+                *byte = DisplayByte::Committed;
+            }
+        }
+    }
+    for segment in segments {
+        if segment.bytes.is_empty() {
+            return Err(AttestError::Transcript);
+        }
+        let end = segment
+            .start
+            .checked_add(segment.bytes.len())
+            .ok_or(AttestError::Transcript)?;
+        let selected = bytes
+            .get_mut(segment.start..end)
+            .ok_or(AttestError::Transcript)?;
+        for (view, byte) in selected.iter_mut().zip(&segment.bytes) {
+            if !matches!(view, DisplayByte::Hidden) {
+                return Err(AttestError::Transcript);
+            }
+            *view = DisplayByte::Disclosed(*byte);
+        }
+    }
+    Ok(bytes)
+}
+
+fn render(bytes: Vec<DisplayByte>) -> Vec<u8> {
+    let mut output = Vec::new();
+    for byte in bytes {
+        match byte {
+            DisplayByte::Hidden => output.extend_from_slice(HIDDEN_BYTE.as_bytes()),
+            DisplayByte::Committed => output.extend_from_slice(COMMITTED_BYTE.as_bytes()),
+            DisplayByte::Disclosed(byte) => output.push(byte),
+        }
+    }
+    output
 }

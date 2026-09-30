@@ -17,6 +17,7 @@ rayon = ["mpz-zk/rayon", "mpz-garble/rayon"]
 web = ["dep:web-spawn"]
 hash-keccak256 = ["mpz-hash/keccak256"]
 hash-blake3 = ["mpz-hash/blake3"]
+hash-poseidon2-koalabear = ["tlsn-core/hash-poseidon2-koalabear", "mpz-hash/poseidon2-koalabear"]
 
 [dependencies]
 tlsn-attestation = { workspace = true }

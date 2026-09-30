@@ -52,6 +52,9 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 # enum_glob_use = "deny"
 
 [workspace.dependencies]
+p3-field = "=0.8.0"
+p3-koala-bear = "=0.8.0"
+p3-poseidon2 = "=0.8.0"
 mpz-core = { path = "crates/core" }
 mpz-common = { path = "crates/common" }
 mpz-fields = { path = "crates/fields" }

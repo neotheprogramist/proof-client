@@ -727,15 +727,8 @@ pub struct ResolvedDisclosure {
     selections: SelectionMap,
 }
 impl ResolvedDisclosure {
-    pub(super) fn into_audit_parts(self) -> (RangeSet<usize>, Vec<RangeSet<usize>>, SelectionMap) {
+    pub fn into_parts(self) -> (RangeSet<usize>, Vec<RangeSet<usize>>, SelectionMap) {
         (self.revealed, self.committed, self.selections)
-    }
-
-    pub fn into_parts(self) -> (RangeSet<usize>, RangeSet<usize>) {
-        (
-            self.revealed,
-            self.committed.into_iter().flatten().collect(),
-        )
     }
 
     pub fn commitments(&self) -> &[RangeSet<usize>] {

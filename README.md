@@ -19,7 +19,7 @@ Circuit proofs and TLS disclosure are independent workflows. A circuit proof doe
 
 CLI prerequisites: Git, rustup and a native C toolchain. Extension development and JavaScript checks also require Node.js 26+ with npm. Rust is pinned in `rust-toolchain.toml`; JavaScript tools are locked in `package-lock.json`.
 
-Run zsh/bash examples from the repository root. Cargo builds each command as needed. Walkthroughs preserve earlier artifacts: proof runs use fresh directories; TLS runs reuse local identities. Attesting sends a new HTTP request. There is no browser build step or CI.
+Run zsh/bash examples from the repository root. Cargo builds each command as needed. Proof runs use fresh directories; TLS runs reuse local identities. There is no browser build step or CI.
 
 Agents may install repository dependencies and development tools. Install Cargo tools with a repository-local `--root` under `target/`; do not install globally or change persistent PATH settings. The owner performs Chrome registration, commits and pushes manually.
 
@@ -30,13 +30,13 @@ cargo run --release --locked --bin proof-client -- --help
 
 ## Reading CLI output
 
-Human-readable reports are the default. Stderr records observed execution stages; stdout contains the final report. There are no prompts, inferred output modes or automatic retries.
+Human-readable reports are the default. Stderr records observed stages; stdout contains the final report.
 
 - `--format json` emits one `completed` JSON event. TLS results contain disclosed evidence, never private response bodies or commitment openings.
 - `attest --format raw` emits the exact private response body. It adds no newline; zsh may display `%` after an unterminated line. Other commands reject raw output before I/O.
 - Reports show byte ranges as `[start, end)`, escaping control and non-ASCII bytes. Live `attest` reports print every transcript byte, including cookies and committed values; disclosure labels describe what the verifier receives. `serve` and `inspect` print plaintext only for revealed ranges. Displayed text is not reconstructed JSON.
 
-Proof progress identifies contract preparation, input counts, child-proof checks, witness evaluation, proof generation and self-verification. TLS progress identifies connection, disclosure resolution, verification, receipt matching and closure as each occurs. Publication is a separate event: a later output failure does not undo a successful verification or published file.
+Progress identifies proof preparation and self-verification, or TLS connection, disclosure, verification and receipt matching. Publication is separate from verification.
 
 Inspect a run by replacing the placeholder with the parent directory of the reported metadata file:
 
@@ -52,7 +52,7 @@ For reproduction, retain trusted circuit sources, expected public inputs and req
 
 ## Serve / attest
 
-Both peers must use this patched build; the mux protocol differs from unpatched TLSNotary alpha.15. Both verifier endpoints use loopback addresses. QUIC authenticates the verifier using TLS 1.3; the prover opens the target socket using TLSN's TLS 1.2/HTTP/1.1 baseline. Target certificates use the pinned Mozilla roots unless `--target-ca` supplies a replacement bundle. Attest trusts the prepared local verifier certificate unless `--verifier-ca` explicitly supplies another bundle. Idle listeners wait for a client; the connected-session deadline starts at acceptance. Application lifecycle events use standard text `tracing` on stderr; terminal stdout follows the selected report format. Tracing records contain operation names, listener addresses, byte counts and output paths; request values and witnesses are excluded; circuit source paths and input counts may be shown. Library consumers install their own subscriber. Each connection carries one attestation; local clients are not authenticated.
+Both peers must use this patched build; its mux protocol differs from unpatched TLSNotary alpha.15. Verifier endpoints are loopback-only and use QUIC/TLS 1.3. The target uses TLSN’s TLS 1.2/HTTP/1.1 baseline and Mozilla roots, or a replacement `--target-ca` bundle. Attest trusts the local verifier certificate, or `--verifier-ca`. Each connection carries one attestation; local clients are not authenticated. Tracing excludes request values and witnesses; it may include addresses, paths and byte/input counts. Library consumers install their own subscriber.
 
 Only user-selected authenticated transcript ranges may be disclosed to the verifier. Requests, witnesses and undisclosed response bytes remain local. Selected commitment ranges and blinded digests are public; protocol metadata and transcript lengths are part of the disclosure baseline.
 
@@ -62,9 +62,9 @@ Host must match the URL and Content-Length must match the body; suppressing eith
 
 The CLI defaults to `--data-dir .data`, verifier address `127.0.0.1:7047`, verifier TLS name `localhost`, and identity files `identity/verifier.pem` and `identity/verifier.key` beneath the data directory. `serve --server-name` independently specifies the expected HTTPS target. Missing identity files fail; nothing generates or trusts a certificate implicitly. Existing path/address flags override these defaults.
 
-Each invocation saves pretty-printed metadata under `<data-dir>/runs/attest.<datetime>/metadata.json` or `serve.<datetime>/metadata.json` and reports its path on stderr. Run names use UTC; collisions fail without overwriting. `--metadata-output` supplies an explicit unused destination when needed. Private metadata contains commitment openings and local selector mappings; verifier metadata contains neither. Output files are never overwritten. Runtime artifacts are ignored under `.data/`; builds use `target/`.
+Metadata is saved under `<data-dir>/runs/{attest,serve}.<UTC datetime>/metadata.json`, or `--metadata-output`, and reported on stderr. Destinations must be unused; collisions fail without overwriting. Runtime artifacts are ignored under `.data/`; builds use `target/`.
 
-Omitting `--disclosure` hides all transcript bytes and creates no explicit commitments. A supplied [policy](examples/mbank/disclosure.json) has symmetric `reveal` and `commit` objects, each containing `sent` and `received` selections. Omitted objects/directions and empty arrays select nothing; `{}` hides everything. Unknown fields, missing selectors and overlapping reveal/commit ranges fail. Revealed ranges form a union. Each distinct committed selection produces one independently openable blinded BLAKE3 commitment. Identical selections share a commitment; empty or partially overlapping committed selections fail. All wire ranges of one selection, including across HTTP chunks, share its digest and blinder. The per-session count limit is `MAX_COMMITMENTS` in `crates/core/src/tls/mod.rs`.
+Omitting `--disclosure` hides all transcript bytes and creates no explicit commitments. A supplied [policy](examples/mbank/disclosure.json) has symmetric `reveal` and `commit` objects, each containing `sent` and `received` selections. Omitted objects/directions and empty arrays select nothing; `{}` hides everything. Unknown fields, missing selectors and overlapping reveal/commit ranges fail. Revealed ranges form a union. Each distinct committed selection produces one independently openable blinded commitment (BLAKE3 by default). Identical selections share a commitment; empty or partially overlapping committed selections fail. All wire ranges of one selection, including across HTTP chunks, share its digest and blinder. The per-session count limit is `MAX_COMMITMENTS` in `crates/core/src/tls/mod.rs`.
 
 Live commitment numbers follow transcript order, sent before received. Match openings to commitments by direction and ranges, not array position. The prover's selector report uses the same mapping; these local labels do not authenticate JSON ancestry. Earlier saved records retain their original grouping.
 
@@ -80,9 +80,23 @@ Live commitment numbers follow transcript order, sent before received. Match ope
 
 Selectors use JSON Pointer escaping (`~0` for `~`, `~1` for `/`). Original bytes, including decimal spelling and string escapes, are preserved across HTTP chunks. Duplicate decoded keys fail. There are no wildcard queries, implicit structural disclosures or policy-file discovery.
 
-Terminal reports show revealed, committed and hidden byte ranges with counts and full commitment digests. Native messaging retains its bytewise 🙈/🔒 transcript representation. Neither view is an authoritative JSON document. A prover-selected pointer does not establish JSON ancestry to the verifier when context is hidden. TLSN authenticates selected bytes and positions; application statements require authenticated context or a separate proof. Successful live operations construct `VerifiedReport` and `Receipt`; deserialized `ReportData` is untrusted. Results are not portable signed attestations and establish neither account ownership nor independent freshness or completeness.
+TLSN authenticates selected bytes and positions, not hidden JSON ancestry, account ownership, freshness or completeness. Application statements require authenticated context or a separate proof. Successful live operations construct `VerifiedReport` and `Receipt`; deserialized `ReportData` is untrusted. Native messaging displays hidden/committed bytes as 🙈/🔒.
 
-Receipt validation, successful QUIC closure, metadata publication and stdout delivery are separate transitions. The `published` event records only metadata publication. Each CLI saves metadata before writing stdout. A local save or stdout failure can follow a successful remote verification or target request; metadata can remain after a broken pipe or cancellation. Nothing retries automatically. One framed HTTP response completes without waiting for connection closure; surplus bytes are discarded, never interpreted as another response. Admission budgets live in `crates/core/src/tls/attest.rs`.
+Receipt validation, QUIC closure, metadata publication and stdout delivery are separate transitions. Metadata is saved before stdout; a save or broken pipe failure can follow successful remote verification. Published files remain. There are no automatic retries.
+
+Idle listeners wait for a client. `SESSION_TIMEOUT` in `crates/core/src/tls/attest.rs` bounds the connected session; Quinn's default idle timeout can expire sooner during silent computation. Synchronous circuit work is not preempted by a cooperative deadline. After closure, `draining_transport` waits for Quinn’s RTT-dependent three-PTO timer, outside the session deadline; `transport_drained` confirms shutdown. One framed HTTP response completes without EOF; surplus bytes are discarded.
+
+### KoalaBear commitments
+
+BLAKE3 remains the default. To select the experimental Plonky3 suite, add `--commitment-hash poseidon2-koalabear-16-pad10-v1` to both `serve` and `attest`. Serve also requires `--max-commitment-permutations N`, where `N` is a positive operator-selected budget. Mismatched algorithms and excess work are rejected before either peer schedules commitment hashes; no algorithm is substituted.
+
+For selections of lengths `n_i`, the required budget is `sum(ceil((n_i + 53) / 24))`. Count each distinct commitment separately and add its discontiguous range lengths. For example, separate 34- and 90-byte selections need ten permutations. This bounds work, not peak memory; see the [measurements](#verification) before choosing a budget.
+
+The frozen suite uses private TLSNotary ID 128, stock Plonky3 v0.8.0 KoalaBear Poseidon2 (`p = 2130706433`, width/rate/capacity 16/8/8, eight full and twenty partial rounds, cubic S-box), and eight canonical little-endian `u32` digest words. Its generic collision ceiling is approximately 124 bits. Frozen byte-hash vectors live in `crates/core/tests/poseidon2.rs`.
+
+Hash the domain `tlsn/poseidon2/koalabear/16/pad10/v1`, selected bytes in transcript order, the independent 16-byte blinder, and byte `01`; zero-fill to a multiple of three bytes and pack each triple little-endian. Apply stock `Pad10Sponge` with overwrite absorption and `Increment(ONE)`. Partial final blocks append field one and zeros; full final blocks increment the first capacity element. Update boundaries introduce no separators.
+
+The new suite is exposed through the Rust and CLI interfaces. SDK/WASM mappings are unchanged. Existing circuit `poseidon2` operations retain their separate encoding; they cannot directly verify these openings. Opening-proof circuits are not shipped or tested here. A later consumer must bind its public digest, suite and selection to accepted TLS evidence and reject noncanonical digest words. A saved metadata file alone supplies no authority.
 
 ### Local fixture
 
@@ -320,33 +334,27 @@ Installed Chrome cancellation and live-target acceptance require manual verifica
 
 ## Verification
 
+Earlier isolated MPC measurements on macOS arm64 (2026-09-29) reached 6.27 GiB peak RSS for separate 34- and 90-byte commitments. The standalone cost harness has been removed; this is historical sizing evidence, not a deployment limit. The CLI TLS workflow exercises both commitment suites with the real MPC stack.
+
 With dependencies cached:
 
 ```sh
 cargo fmt --package proof-client --package proof-client-core --check
 cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --offline --workspace
-cargo test --locked --offline -p proof-client-core --test hiding parallel_hiding_admission -- --ignored --exact --nocapture
 cargo test --locked --offline -p proof-client-core --test recursion eight_leaf_recursion -- --ignored --exact --nocapture
 cargo test --locked --offline -p proof-client-core --lib verifier_set_membership_is_enforced_without_host_admission -- --ignored --nocapture
 ```
 
-Format only consumer packages; `cargo fmt --all` visits vendor trees. Run all three ignored gates sequentially for proof changes; the workspace suite skips them. Adversarial controls bypass witness checks and exercise the emitted constraints.
+Format only consumer packages; `cargo fmt --all` visits vendor trees. Run the two ignored gates sequentially for proof changes; the workspace suite skips them. Adversarial controls bypass witness checks and exercise the emitted constraints.
 
 ```sh
 npm run fmt:check
 npm run lint
 npm run typecheck
 npm test
-npm run mutate
 ```
 
-For Rust behavior changes, run a consumer mutation shard. Install cargo-mutants locally and add it to the current shell's PATH:
+Tests also document usage: [CLI prepare/prove/verify](crates/cli/tests/e2e.rs), [TLS disclose/commit/inspect](crates/cli/tests/tls.rs), [recursive library proof session](crates/core/tests/recursion.rs), and [HTTP receive/resolve](crates/core/tests/disclosure.rs). Independent cryptographic conformance and adversarial proof checks remain because matching peers can share a bug. Mutation testing is not required.
 
-```sh
-cargo install cargo-mutants --version 27.1.0 --locked --root target/tools
-export PATH="$PWD/target/tools/bin:$PATH"
-cargo mutants --workspace --test-package proof-client --copy-target=false --profile test --cargo-arg=--package=proof-client --cargo-arg="--target-dir=$PWD/target/mutation-build" --cargo-arg=--locked --cargo-arg=--offline --cargo-arg=--test=audit --file crates/core/src/tls/evidence.rs --shard 2/4 --sharding round-robin
-```
-
-This scope mutates the core record boundary and runs its CLI consumer tests; the explicit Cargo package argument also selects that integration target during the build. Rotate the consumer file, tests and shard on subsequent changes. For the complete diagnostic, remove `--test-package`, `--cargo-arg=--package=proof-client`, `--cargo-arg=--test=audit`, `--file`, `--shard` and `--sharding`, and add `--test-workspace=true`. The full JavaScript mutation scope is `extension/*.mjs`. `npm test` exercises native-port ownership and the page/toolbar using a fake Chrome API and a DOM implementation; installed Chrome remains a manual integration check. Stryker uses its default workers and reporters; reports appear under ignored `reports/`. Its configuration selects the extension, excludes runtime/build data and requires every non-equivalent mutant to be caught. Only unreachable or behaviorally equivalent branches have documented exclusions.
+`npm test` exercises native-port ownership and the page/toolbar using a fake Chrome API and a DOM implementation; installed Chrome remains a manual integration check.

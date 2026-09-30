@@ -4,7 +4,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
-fn main() {
+#[derive(Debug, thiserror::Error)]
+enum BuildError {
+    #[error("building circuit: {0}")]
+    Circuit(#[from] mpz_circuits_core::BuilderError),
+    #[error("encoding circuit: {0}")]
+    Encode(#[from] bincode::Error),
+    #[error("writing generated circuit: {0}")]
+    Write(#[from] std::io::Error),
+}
+
+fn main() -> Result<(), BuildError> {
     println!("cargo:rerun-if-changed=../circuits-core/bristol");
 
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -14,6 +24,17 @@ fn main() {
     build_sha2(&circuits_dir, &output);
     build_blake3(&output);
     build_keccak(&circuits_dir, &output);
+    #[cfg(feature = "poseidon2-koalabear")]
+    {
+        use mpz_circuits_core::circuits::poseidon2_koalabear;
+        for (name, circuit) in [
+            ("poseidon2_koalabear", poseidon2_koalabear::permute()?),
+            ("koalabear_increment", poseidon2_koalabear::increment()?),
+        ] {
+            write(output.join(format!("{name}.bin")), bincode::serialize(&circuit)?)?;
+        }
+    }
+    Ok(())
 }
 
 fn build_aes(circuits_dir: &Path, output: &Path) {

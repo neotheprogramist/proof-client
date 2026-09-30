@@ -48,6 +48,9 @@ panic = "abort"
 codegen-units = 1
 
 [workspace.dependencies]
+p3-field = "=0.8.0"
+p3-koala-bear = "=0.8.0"
+p3-symmetric = "=0.8.0"
 tls-server-fixture = { path = "crates/tls/server-fixture" }
 tlsn-attestation = { path = "crates/attestation" }
 tlsn-cipher = { path = "crates/components/cipher" }

@@ -34,11 +34,9 @@ for (const form of document.querySelectorAll("form")) {
       case phases.cancelled:
         output.textContent = "Cancelled. Check output paths before starting a new operation.";
         break;
-      // Stryker disable next-line all: TypeScript checks the closed state union.
       default: {
         /** @type {never} */
         const unreachable = state;
-        // Stryker disable next-line all: unreachable for the closed state union.
         throw new NativeError(`Unhandled state: ${unreachable}`);
       }
     }

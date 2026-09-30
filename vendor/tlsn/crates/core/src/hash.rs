@@ -5,6 +5,11 @@ use std::{collections::HashMap, fmt::Display};
 use rand::{distr::StandardUniform, prelude::Distribution};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+#[cfg(feature = "hash-poseidon2-koalabear")]
+mod poseidon2_koalabear;
+#[cfg(feature = "hash-poseidon2-koalabear")]
+pub use poseidon2_koalabear::Poseidon2KoalaBear;
+
 /// Maximum length of a hash value.
 const MAX_LEN: usize = 64;
 
@@ -25,6 +30,8 @@ impl Default for HashProvider {
         algs.insert(HashAlgId::SHA256, Box::new(Sha256::default()));
         algs.insert(HashAlgId::BLAKE3, Box::new(Blake3::default()));
         algs.insert(HashAlgId::KECCAK256, Box::new(Keccak256::default()));
+        #[cfg(feature = "hash-poseidon2-koalabear")]
+        algs.insert(HashAlgId::POSEIDON2_KOALABEAR_16_PAD10_V1, Box::new(Poseidon2KoalaBear));
 
         Self { algs }
     }
@@ -66,6 +73,8 @@ impl HashAlgId {
     pub const BLAKE3: Self = Self(2);
     /// Keccak-256 hash algorithm.
     pub const KECCAK256: Self = Self(3);
+    /// Private suite: poseidon2-koalabear-16-pad10-v1.
+    pub const POSEIDON2_KOALABEAR_16_PAD10_V1: Self = Self(128);
 
     /// Creates a new hash algorithm identifier.
     ///

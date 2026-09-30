@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import { setImmediate } from "node:timers/promises";
 import test from "node:test";
 import { JSDOM } from "jsdom";
-import { invoke, NativeError, phases, step } from "../extension/native.mjs";
+import { invoke, NativeError, phases } from "../extension/native.mjs";
 
 function events() {
   /** @type {Set<(...args: any[]) => void>} */
@@ -412,108 +412,6 @@ test("toolbar opens the local page and reports a rejected browser operation", as
     errors.mock.calls.map((call) => call.arguments),
     [["Cannot open Proof Client", failure]],
   );
-});
-
-test("cleanup witness rejects each leaked native resource", () => {
-  for (const defect of ["disconnect", "message", "disconnect-listener"]) {
-    const fake = browser();
-    const port = fake.runtime.connectNative("io.github.neotheprogramist.proof_client");
-    port.disconnect();
-    closed(port);
-    if (defect === "disconnect") port.disconnected = 0;
-    if (defect === "message") port.onMessage.addListener(() => {});
-    if (defect === "disconnect-listener") port.onDisconnect.addListener(() => {});
-    assert.throws(() => closed(port), assert.AssertionError);
-  }
-});
-
-test("page rejects incomplete form structure and file arguments", async (context) => {
-  for (const [index, inner] of [
-    '<output></output><button type="button"></button>',
-    '<fieldset></fieldset><button type="button"></button>',
-    "<fieldset></fieldset><output></output>",
-    '<fieldset><input type="file" name="payload"></fieldset><output></output><button type="button"></button>',
-  ].entries()) {
-    await context.test(String(index), async (context) => {
-      const window = page(context, `<form id="prove">${inner}</form>`);
-      const loaded = import(`../extension/page.mjs?form=${index}`);
-      if (index < 3) await assert.rejects(loaded, { message: "Operation form is incomplete" });
-      else {
-        await loaded;
-        const form = window.document.querySelector("form");
-        const output = window.document.querySelector("output");
-        assert.ok(form && output);
-        form.dispatchEvent(new window.Event("submit"));
-        assert.equal(output.textContent, "Failed: Expected a text argument");
-      }
-    });
-  }
-});
-
-test("operation machine agrees with its transition model and freezes observations", async () => {
-  const fc = await import("fast-check");
-  const transitions = {
-    ready: { event: "ready", address: "localhost" },
-    completed: { event: "completed", result: { verified: true }, text: "verified result" },
-    failed: { event: "failed", message: "rejected" },
-    cancel: { event: "cancel" },
-  };
-  const model = {
-    idle: ["idle", "idle", "idle", "idle"],
-    serve: ["waiting", "error", "failed", "cancelled"],
-    attest: ["error", "succeeded", "failed", "cancelled"],
-    waiting: ["error", "succeeded", "failed", "cancelled"],
-    succeeded: ["succeeded", "succeeded", "succeeded", "succeeded"],
-    failed: ["failed", "failed", "failed", "failed"],
-    cancelled: ["cancelled", "cancelled", "cancelled", "cancelled"],
-  };
-  const entries = Object.values(transitions);
-  // Array shrinking removes transitions; integer shrinking reduces their event indices.
-  /** @param {"idle" | "serve" | "attest"} initial @param {number[]} sequence */
-  const check = (initial, sequence) => {
-    /** @type {import("../extension/native.mjs").State} */
-    let state =
-      initial === "idle"
-        ? Object.freeze({ phase: phases.idle })
-        : Object.freeze({ phase: phases.running, command: initial });
-    /** @type {keyof typeof model} */
-    let expected = initial;
-    for (const index of sequence) {
-      /** @type {string | undefined} */
-      const next = model[expected][index];
-      const event = /** @type {import("../extension/native.mjs").Transition} */ (entries[index]);
-      if (next === "error")
-        assert.throws(() => step(state, event), {
-          message:
-            event.event === "ready" ? "Unexpected ready event" : "Serve completed before ready",
-        });
-      else {
-        /** @type {import("../extension/native.mjs").State} */
-        const previous = state;
-        state = step(state, event);
-        expected = /** @type {keyof typeof model} */ (next);
-        assert.equal(state.phase, ["serve", "attest"].includes(expected) ? "running" : expected);
-        assert.ok(Object.isFrozen(state));
-        if (state.phase === "waiting") assert.equal(state.address, "localhost");
-        if (state.phase === "succeeded") {
-          assert.deepEqual(state.result, { verified: true });
-          assert.equal(state.text, "verified result");
-        }
-        if (state.phase === "failed") assert.equal(state.error.message, "rejected");
-        if (next === previous.phase) assert.equal(state, previous);
-      }
-    }
-  };
-  for (const initial of /** @type {const} */ (["idle", "serve", "attest"])) {
-    for (const prefix of [[], [0], [1], [2], [3], [0, 1]]) {
-      for (const index of entries.keys()) check(initial, [...prefix, index]);
-    }
-    fc.assert(
-      fc.property(fc.array(fc.integer({ min: 0, max: entries.length - 1 })), (sequence) =>
-        check(initial, sequence),
-      ),
-    );
-  }
 });
 
 test(

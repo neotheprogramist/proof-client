@@ -45,14 +45,10 @@ p3-lookup.workspace = true
 p3-air.workspace = true
 
 [dev-dependencies]
-p3-challenger.workspace = true
-p3-dft.workspace = true
-p3-matrix.workspace = true
-mpz-common.workspace = true
+mpz-circuits-core.workspace = true
 futures-rustls.workspace = true
 clap.workspace = true
 rcgen.workspace = true
-tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 proptest.workspace = true
 wait-timeout.workspace = true

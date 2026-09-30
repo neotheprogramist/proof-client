@@ -1,7 +1,293 @@
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -52,6 +52,9 @@ unexpected_cfgs = { level = "warn", check-cfg = [
+ # enum_glob_use = "deny"
+
+ [workspace.dependencies]
++p3-field = "=0.8.0"
++p3-koala-bear = "=0.8.0"
++p3-poseidon2 = "=0.8.0"
+ mpz-core = { path = "crates/core" }
+ mpz-common = { path = "crates/common" }
+ mpz-fields = { path = "crates/fields" }
+diff --git a/crates/circuits/Cargo.toml b/crates/circuits/Cargo.toml
+--- a/crates/circuits/Cargo.toml
++++ b/crates/circuits/Cargo.toml
+@@ -10,6 +10,7 @@ workspace = true
+ name = "mpz_circuits"
+
+ [features]
++poseidon2-koalabear = ["mpz-circuits-data/poseidon2-koalabear"]
+ default = []
+ aes = ["mpz-circuits-data/aes"]
+ sha2 = ["mpz-circuits-data/sha2"]
+diff --git a/crates/circuits/src/lib.rs b/crates/circuits/src/lib.rs
+--- a/crates/circuits/src/lib.rs
++++ b/crates/circuits/src/lib.rs
+@@ -1,5 +1,8 @@
+ //! Circuits and circuit builder types.
+
++#[cfg(feature = "poseidon2-koalabear")]
++pub use mpz_circuits_data::{KOALABEAR_INCREMENT, POSEIDON2_KOALABEAR};
++
+ #[cfg(feature = "aes")]
+ pub use mpz_circuits_data::AES128;
+
+diff --git a/crates/circuits-core/Cargo.toml b/crates/circuits-core/Cargo.toml
+--- a/crates/circuits-core/Cargo.toml
++++ b/crates/circuits-core/Cargo.toml
+@@ -10,11 +10,15 @@ workspace = true
+ name = "mpz_circuits_core"
+
+ [features]
++poseidon2-koalabear = ["dep:p3-field", "dep:p3-koala-bear", "dep:p3-poseidon2"]
+ default = ["parse", "serde"]
+ parse = ["dep:regex"]
+ serde = ["dep:serde", "dep:serde_arrays", "dep:bincode"]
+
+ [dependencies]
++p3-field = { workspace = true, optional = true }
++p3-koala-bear = { workspace = true, optional = true }
++p3-poseidon2 = { workspace = true, optional = true }
+ bincode = { workspace = true, optional = true }
+ itybity = { workspace = true }
+ once_cell = { workspace = true }
+diff --git b/crates/circuits-core/src/circuits/poseidon2_koalabear.rs b/crates/circuits-core/src/circuits/poseidon2_koalabear.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/circuits-core/src/circuits/poseidon2_koalabear.rs
+@@ -0,0 +1,180 @@
++//! Stock Plonky3 width-16 KoalaBear Poseidon2 over Boolean gates.
++
++use std::array::from_fn;
++
++use p3_field::{PrimeCharacteristicRing, PrimeField32};
++use p3_koala_bear::{
++    GenericPoseidon2LinearLayersKoalaBear, KOALABEAR_POSEIDON2_RC_16_EXTERNAL_FINAL,
++    KOALABEAR_POSEIDON2_RC_16_EXTERNAL_INITIAL, KOALABEAR_POSEIDON2_RC_16_INTERNAL, KoalaBear,
++};
++use p3_poseidon2::GenericPoseidon2LinearLayers;
++
++use crate::{BuilderError, Circuit, CircuitBuilder, Feed, Node, ops};
++
++#[derive(Clone, Copy)]
++struct Word([Node<Feed>; 31]);
++
++impl Word {
++    fn constant(builder: &CircuitBuilder, value: KoalaBear) -> Self {
++        let value = value.as_canonical_u32();
++        Self(from_fn(|i| {
++            if value >> i & 1 == 0 {
++                builder.get_const_zero()
++            } else {
++                builder.get_const_one()
++            }
++        }))
++    }
++
++    fn reduce_once(builder: &mut CircuitBuilder, bits: [Node<Feed>; 32]) -> Self {
++        let modulus = from_fn::<_, 32, _>(|i| {
++            if KoalaBear::ORDER_U32 >> i & 1 == 0 {
++                builder.get_const_zero()
++            } else {
++                builder.get_const_one()
++            }
++        });
++        let (difference, borrow) = ops::wrapping_sub(builder, &bits, &modulus);
++        // PROOF: caller supplies a value below 2p; one subtraction yields a residue below p.
++        Self(from_fn(|i| {
++            let delta = builder.add_xor_gate(bits[i], difference[i]);
++            let selected = builder.add_and_gate(delta, borrow);
++            builder.add_xor_gate(difference[i], selected)
++        }))
++    }
++
++    fn reduce(builder: &mut CircuitBuilder, bits: &[Node<Feed>]) -> Self {
++        let mut remainder = Self::constant(builder, KoalaBear::ZERO);
++        for bit in bits.iter().rev() {
++            let shifted = from_fn(|i| if i == 0 { *bit } else { remainder.0[i - 1] });
++            // PROOF: r < p implies 2r + bit < 2p.
++            remainder = Self::reduce_once(builder, shifted);
++        }
++        remainder
++    }
++
++    fn add(self, builder: &mut CircuitBuilder, rhs: Self) -> Self {
++        let mut carry = builder.get_const_zero();
++        let mut sum = [builder.get_const_zero(); 32];
++        for (i, out) in sum.iter_mut().take(31).enumerate() {
++            (*out, carry) = ops::full_adder(builder, self.0[i], rhs.0[i], carry);
++        }
++        sum[31] = carry;
++        Self::reduce_once(builder, sum)
++    }
++
++    fn mul(self, builder: &mut CircuitBuilder, rhs: Self) -> Self {
++        let mut product = [builder.get_const_zero(); 62];
++        for (shift, bit) in rhs.0.into_iter().enumerate() {
++            let mut carry = builder.get_const_zero();
++            for i in 0..31 {
++                let partial = builder.add_and_gate(self.0[i], bit);
++                (product[shift + i], carry) =
++                    ops::full_adder(builder, product[shift + i], partial, carry);
++            }
++            // PROOF: earlier partial products use at most shift + 31 bits.
++            product[shift + 31] = carry;
++        }
++        Self::reduce(builder, &product)
++    }
++
++    fn cube(self, builder: &mut CircuitBuilder) -> Self {
++        let square = self.mul(builder, self);
++        square.mul(builder, self)
++    }
++}
++
++fn external(builder: &mut CircuitBuilder, state: &mut [Word; 16]) {
++    for x in state.as_chunks_mut::<4>().0 {
++        let t01 = x[0].add(builder, x[1]);
++        let t23 = x[2].add(builder, x[3]);
++        let sum = t01.add(builder, t23);
++        let s1 = sum.add(builder, x[1]);
++        let s3 = sum.add(builder, x[3]);
++        let d0 = x[0].add(builder, x[0]);
++        let d2 = x[2].add(builder, x[2]);
++        *x = [
++            s1.add(builder, t01),
++            s1.add(builder, d2),
++            s3.add(builder, t23),
++            s3.add(builder, d0),
++        ];
++    }
++    let sums: [_; 4] = from_fn(|i| {
++        let a = state[i].add(builder, state[i + 4]);
++        let b = state[i + 8].add(builder, state[i + 12]);
++        a.add(builder, b)
++    });
++    for (i, word) in state.iter_mut().enumerate() {
++        *word = word.add(builder, sums[i % 4]);
++    }
++}
++
++fn full_rounds(builder: &mut CircuitBuilder, state: &mut [Word; 16], rounds: &[[KoalaBear; 16]]) {
++    for constants in rounds {
++        for (word, constant) in state.iter_mut().zip(constants) {
++            let constant = Word::constant(builder, *constant);
++            *word = word.add(builder, constant).cube(builder);
++        }
++        external(builder, state);
++    }
++}
++
++/// `fn([u32; 16]) -> [u32; 16]`; inputs are reduced modulo p, outputs are canonical.
++pub fn permute() -> Result<Circuit, BuilderError> {
++    let mut builder = CircuitBuilder::new();
++    let input: [[_; 32]; 16] = from_fn(|_| from_fn(|_| builder.add_input()));
++    let mut state = input.map(|bits| Word::reduce(&mut builder, &bits));
++    external(&mut builder, &mut state);
++    full_rounds(
++        &mut builder,
++        &mut state,
++        &KOALABEAR_POSEIDON2_RC_16_EXTERNAL_INITIAL,
++    );
++
++    let mut diagonal = [KoalaBear::ONE; 16];
++    GenericPoseidon2LinearLayersKoalaBear::internal_linear_layer(&mut diagonal);
++    let diagonal = diagonal.map(|value| value - KoalaBear::from_u32(16));
++    for constant in KOALABEAR_POSEIDON2_RC_16_INTERNAL {
++        let constant = Word::constant(&builder, constant);
++        state[0] = state[0].add(&mut builder, constant).cube(&mut builder);
++        let zero = Word::constant(&builder, KoalaBear::ZERO);
++        let sum = state
++            .into_iter()
++            .fold(zero, |sum, word| sum.add(&mut builder, word));
++        for (word, coefficient) in state.iter_mut().zip(diagonal) {
++            let coefficient = Word::constant(&builder, coefficient);
++            *word = word.mul(&mut builder, coefficient).add(&mut builder, sum);
++        }
++    }
++    full_rounds(
++        &mut builder,
++        &mut state,
++        &KOALABEAR_POSEIDON2_RC_16_EXTERNAL_FINAL,
++    );
++    for word in state {
++        for bit in word.0 {
++            let output = builder.add_id_gate(bit);
++            builder.add_output(output);
++        }
++        // PROOF: the builder requires an actual gate for each output, including zero.
++        let zero = builder.add_xor_gate(input[0][0], input[0][0]);
++        builder.add_output(zero);
++    }
++    builder.build()
++}
++
++/// `fn(u32) -> u32`: field increment for full-block sponge padding.
++pub fn increment() -> Result<Circuit, BuilderError> {
++    let mut builder = CircuitBuilder::new();
++    let input: [_; 32] = from_fn(|_| builder.add_input());
++    let value = Word::reduce(&mut builder, &input);
++    let one = Word::constant(&builder, KoalaBear::ONE);
++    for bit in value.add(&mut builder, one).0 {
++        let output = builder.add_id_gate(bit);
++        builder.add_output(output);
++    }
++    let zero = builder.add_xor_gate(input[0], input[0]);
++    builder.add_output(zero);
++    builder.build()
++}
+diff --git a/crates/circuits-core/src/circuits.rs b/crates/circuits-core/src/circuits.rs
+--- a/crates/circuits-core/src/circuits.rs
++++ b/crates/circuits-core/src/circuits.rs
+@@ -1,6 +1,8 @@
+ //! Circuits for MPC.
+
+ pub mod blake3;
++#[cfg(feature = "poseidon2-koalabear")]
++pub mod poseidon2_koalabear;
+
+ use crate::{Circuit, CircuitBuilder};
+
+diff --git a/crates/circuits-data/Cargo.toml b/crates/circuits-data/Cargo.toml
+--- a/crates/circuits-data/Cargo.toml
++++ b/crates/circuits-data/Cargo.toml
+@@ -10,6 +10,7 @@ workspace = true
+ name = "mpz_circuits_data"
+
+ [features]
++poseidon2-koalabear = ["mpz-circuits-core/poseidon2-koalabear"]
+ default = []
+ aes = []
+ sha2 = []
+@@ -29,5 +30,6 @@ sha2 = { workspace = true }
+ zerocopy = { workspace = true }
+
+ [build-dependencies]
++thiserror = { workspace = true }
+ bincode = { workspace = true }
+ mpz-circuits-core = { workspace = true }
 diff --git a/crates/circuits-data/build.rs b/crates/circuits-data/build.rs
 --- a/crates/circuits-data/build.rs
 +++ b/crates/circuits-data/build.rs
-@@ -9,51 +9,52 @@
+@@ -4,56 +4,78 @@ use std::{
+     path::{Path, PathBuf},
+ };
+
+-fn main() {
++#[derive(Debug, thiserror::Error)]
++enum BuildError {
++    #[error("building circuit: {0}")]
++    Circuit(#[from] mpz_circuits_core::BuilderError),
++    #[error("encoding circuit: {0}")]
++    Encode(#[from] bincode::Error),
++    #[error("writing generated circuit: {0}")]
++    Write(#[from] std::io::Error),
++}
++
++fn main() -> Result<(), BuildError> {
+     println!("cargo:rerun-if-changed=../circuits-core/bristol");
 
      let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
      let circuits_dir = PathBuf::from(manifest_dir).join("../circuits-core/bristol");
@@ -14,6 +300,17 @@ diff --git a/crates/circuits-data/build.rs b/crates/circuits-data/build.rs
 +    build_sha2(&circuits_dir, &output);
 +    build_blake3(&output);
 +    build_keccak(&circuits_dir, &output);
++    #[cfg(feature = "poseidon2-koalabear")]
++    {
++        use mpz_circuits_core::circuits::poseidon2_koalabear;
++        for (name, circuit) in [
++            ("poseidon2_koalabear", poseidon2_koalabear::permute()?),
++            ("koalabear_increment", poseidon2_koalabear::increment()?),
++        ] {
++            write(output.join(format!("{name}.bin")), bincode::serialize(&circuit)?)?;
++        }
++    }
++    Ok(())
  }
 
 -fn build_aes(circuits_dir: &Path) {
@@ -71,7 +368,28 @@ diff --git a/crates/circuits-data/build.rs b/crates/circuits-data/build.rs
 diff --git a/crates/circuits-data/src/lib.rs b/crates/circuits-data/src/lib.rs
 --- a/crates/circuits-data/src/lib.rs
 +++ b/crates/circuits-data/src/lib.rs
-@@ -11,7 +11,7 @@
+@@ -4,6 +4,20 @@ use mpz_circuits_core::Circuit;
+ use once_cell::sync::Lazy;
+ use std::sync::Arc;
+
++/// Stock KoalaBear width-16 permutation, decoded from build output.
++#[cfg(feature = "poseidon2-koalabear")]
++pub static POSEIDON2_KOALABEAR: Lazy<Result<Arc<Circuit>, bincode::Error>> = Lazy::new(|| {
++    bincode::deserialize(include_bytes!(concat!(env!("OUT_DIR"), "/poseidon2_koalabear.bin")))
++        .map(Arc::new)
++});
++
++/// KoalaBear field increment for full-block padding.
++#[cfg(feature = "poseidon2-koalabear")]
++pub static KOALABEAR_INCREMENT: Lazy<Result<Arc<Circuit>, bincode::Error>> = Lazy::new(|| {
++    bincode::deserialize(include_bytes!(concat!(env!("OUT_DIR"), "/koalabear_increment.bin")))
++        .map(Arc::new)
++});
++
+ /// AES-128 circuit.
+ ///
+ /// The circuit has the following signature:
+@@ -11,7 +25,7 @@ use std::sync::Arc;
  /// `fn(key: [u8; 16], msg: [u8; 16]) -> [u8; 16]`
  #[cfg(feature = "aes")]
  pub static AES128: Lazy<Arc<Circuit>> = Lazy::new(|| {
@@ -80,7 +398,7 @@ diff --git a/crates/circuits-data/src/lib.rs b/crates/circuits-data/src/lib.rs
      Arc::new(bincode::deserialize(bytes).unwrap())
  });
 
-@@ -24,7 +24,7 @@
+@@ -24,7 +38,7 @@ pub static AES128: Lazy<Arc<Circuit>> = Lazy::new(|| {
  /// The output is the key schedule: 11 round keys, 16 bytes each.
  #[cfg(feature = "aes")]
  pub static AES128_KS: Lazy<Arc<Circuit>> = Lazy::new(|| {
@@ -89,7 +407,7 @@ diff --git a/crates/circuits-data/src/lib.rs b/crates/circuits-data/src/lib.rs
      Arc::new(bincode::deserialize(bytes).unwrap())
  });
 
-@@ -37,7 +37,7 @@
+@@ -37,7 +51,7 @@ pub static AES128_KS: Lazy<Arc<Circuit>> = Lazy::new(|| {
  /// `key_schedule` is 11 round keys, 16 bytes each.
  #[cfg(feature = "aes")]
  pub static AES128_POST_KS: Lazy<Arc<Circuit>> = Lazy::new(|| {
@@ -98,7 +416,7 @@ diff --git a/crates/circuits-data/src/lib.rs b/crates/circuits-data/src/lib.rs
      Arc::new(bincode::deserialize(bytes).unwrap())
  });
 
-@@ -48,7 +48,7 @@
+@@ -48,7 +62,7 @@ pub static AES128_POST_KS: Lazy<Arc<Circuit>> = Lazy::new(|| {
  /// `fn(msg: [u8; 64], state: [u32; 8]) -> [u32; 8]`
  #[cfg(feature = "sha2")]
  pub static SHA256_COMPRESS: Lazy<Arc<Circuit>> = Lazy::new(|| {
@@ -107,7 +425,7 @@ diff --git a/crates/circuits-data/src/lib.rs b/crates/circuits-data/src/lib.rs
      Arc::new(bincode::deserialize(bytes).unwrap())
  });
 
-@@ -59,7 +59,7 @@
+@@ -59,7 +73,7 @@ pub static SHA256_COMPRESS: Lazy<Arc<Circuit>> = Lazy::new(|| {
  /// `fn(msg: [u32; 16], state: [u32; 16]) -> [u32; 16]`
  #[cfg(feature = "blake3")]
  pub static BLAKE3_COMPRESS: Lazy<Arc<Circuit>> = Lazy::new(|| {
@@ -116,7 +434,7 @@ diff --git a/crates/circuits-data/src/lib.rs b/crates/circuits-data/src/lib.rs
      Arc::new(bincode::deserialize(bytes).unwrap())
  });
 
-@@ -70,7 +70,7 @@
+@@ -70,7 +84,7 @@ pub static BLAKE3_COMPRESS: Lazy<Arc<Circuit>> = Lazy::new(|| {
  /// `fn(state: [u64; 25]) -> [u64; 25]`
  #[cfg(feature = "keccak")]
  pub static KECCAK_PERMUTE: Lazy<Arc<Circuit>> = Lazy::new(|| {
@@ -128,7 +446,7 @@ diff --git a/crates/circuits-data/src/lib.rs b/crates/circuits-data/src/lib.rs
 diff --git a/crates/common/Cargo.toml b/crates/common/Cargo.toml
 --- a/crates/common/Cargo.toml
 +++ b/crates/common/Cargo.toml
-@@ -21,7 +21,7 @@
+@@ -21,7 +21,7 @@ serio.workspace = true
  serde = { workspace = true, features = ["derive"] }
  pollster.workspace = true
  cfg-if.workspace = true
@@ -140,7 +458,7 @@ diff --git a/crates/common/Cargo.toml b/crates/common/Cargo.toml
 diff --git a/crates/common/src/context.rs b/crates/common/src/context.rs
 --- a/crates/common/src/context.rs
 +++ b/crates/common/src/context.rs
-@@ -250,8 +250,8 @@
+@@ -250,8 +250,8 @@ impl Context {
          // Interleave lane outputs back into input order: lane `l`'s j-th
          // result corresponds to original index `l + j * lanes`, the mirror
          // of how items were scattered into lanes above.
@@ -151,7 +469,7 @@ diff --git a/crates/common/src/context.rs b/crates/common/src/context.rs
              .into_iter()
              .map(Vec::into_iter)
              .collect();
-@@ -283,7 +283,7 @@
+@@ -283,7 +283,7 @@ impl Context {
 
          let task_a = run(pool.as_ref(), async move { a(&mut ctx_a).await });
          let task_b = run(pool.as_ref(), async move { b(&mut ctx_b).await });
@@ -160,7 +478,7 @@ diff --git a/crates/common/src/context.rs b/crates/common/src/context.rs
      }
 
      /// Like [`Context::join`], but short-circuits as soon as either branch
-@@ -314,9 +314,9 @@
+@@ -314,9 +314,9 @@ impl Context {
          let mut ctx_a = self.child(parent_id.child(0))?;
          let mut ctx_b = self.child(parent_id.child(1))?;
 
@@ -173,7 +491,7 @@ diff --git a/crates/common/src/context.rs b/crates/common/src/context.rs
      }
 
      /// Same as [`Context::try_join`], but with three branches.
-@@ -351,10 +351,10 @@
+@@ -351,10 +351,10 @@ impl Context {
          let mut ctx_b = self.child(parent_id.child(1))?;
          let mut ctx_c = self.child(parent_id.child(2))?;
 
@@ -188,7 +506,7 @@ diff --git a/crates/common/src/context.rs b/crates/common/src/context.rs
      }
 
      /// Same as [`Context::try_join`], but with four branches.
-@@ -394,11 +394,11 @@
+@@ -394,11 +394,11 @@ impl Context {
          let mut ctx_c = self.child(parent_id.child(2))?;
          let mut ctx_d = self.child(parent_id.child(3))?;
 
@@ -205,7 +523,7 @@ diff --git a/crates/common/src/context.rs b/crates/common/src/context.rs
      }
 
      fn pool(&self) -> Option<&ThreadPool> {
-@@ -410,29 +410,66 @@
+@@ -410,29 +410,66 @@ impl Context {
      }
  }
 
@@ -279,15 +597,13 @@ diff --git a/crates/common/src/context.rs b/crates/common/src/context.rs
  impl ContextError {
      fn mux(source: std::io::Error) -> Self {
 -        Self { source }
--    }
--}
 +        Self::Mux(source)
-+    }
-+}
+     }
+ }
 diff --git a/crates/common/src/session.rs b/crates/common/src/session.rs
 --- a/crates/common/src/session.rs
 +++ b/crates/common/src/session.rs
-@@ -161,6 +161,12 @@
+@@ -161,6 +161,12 @@ impl Session {
      /// Each context produced by a session is given a distinct ID under the
      /// session's configured prefix.
      pub fn new_context(&self) -> Result<Context, std::io::Error> {
@@ -303,7 +619,7 @@ diff --git a/crates/common/src/session.rs b/crates/common/src/session.rs
 diff --git a/crates/common/src/thread_pool.rs b/crates/common/src/thread_pool.rs
 --- a/crates/common/src/thread_pool.rs
 +++ b/crates/common/src/thread_pool.rs
-@@ -13,6 +13,7 @@
+@@ -13,6 +13,7 @@ use std::sync::{
  use async_task::{Runnable, Task};
  use crossbeam_deque::{Injector, Steal, Stealer, Worker};
  use crossbeam_utils::sync::{Parker, Unparker};
@@ -311,7 +627,7 @@ diff --git a/crates/common/src/thread_pool.rs b/crates/common/src/thread_pool.rs
 
  /// A shared handle to a thread pool.
  ///
-@@ -56,26 +57,25 @@
+@@ -56,16 +57,19 @@ struct Inner {
      injector: Injector<Runnable>,
      stealers: Vec<Stealer<Runnable>>,
      workers: Box<[WorkerState]>,
@@ -322,32 +638,32 @@ diff --git a/crates/common/src/thread_pool.rs b/crates/common/src/thread_pool.rs
  impl Inner {
      fn shutdown(&self) {
 -        self.shutdown.store(true, Ordering::SeqCst);
--
--        // Drain the injector before unparking workers. Any push that races
--        // with this drain is handled by the shutdown check in the schedule
--        // callback (see `spawn_on`), which drops the runnable.
 +        self.shutdown.send_replace(true);
 +        self.drain();
 +        for w in self.workers.iter() {
 +            w.unparker.unpark();
 +        }
 +    }
-+
+
+-        // Drain the injector before unparking workers. Any push that races
+-        // with this drain is handled by the shutdown check in the schedule
+-        // callback (see `spawn_on`), which drops the runnable.
 +    fn drain(&self) {
          loop {
              match self.injector.steal() {
                  Steal::Success(_) => continue,
-                 Steal::Empty => break,
+@@ -73,10 +77,6 @@ impl Inner {
                  Steal::Retry => continue,
              }
--        }
+         }
 -
 -        for w in self.workers.iter() {
 -            w.unparker.unpark();
-         }
+-        }
      }
  }
-@@ -226,7 +226,16 @@
+
+@@ -226,7 +226,16 @@ impl ThreadPool {
 
      /// Returns `true` if the pool has been shut down.
      pub fn is_shutdown(&self) -> bool {
@@ -365,7 +681,7 @@ diff --git a/crates/common/src/thread_pool.rs b/crates/common/src/thread_pool.rs
      }
 
      fn new(num_threads: usize, spawn: &SpawnFn) -> Result<ThreadPool, ThreadPoolBuildError> {
-@@ -250,7 +259,7 @@
+@@ -250,7 +259,7 @@ impl ThreadPool {
              injector,
              stealers,
              workers,
@@ -374,7 +690,7 @@ diff --git a/crates/common/src/thread_pool.rs b/crates/common/src/thread_pool.rs
          });
 
          for (index, (local, parker)) in worker_queues.into_iter().zip(parkers).enumerate() {
-@@ -284,7 +293,7 @@
+@@ -284,7 +293,7 @@ fn worker_loop(inner: Arc<Inner>, local: Worker<Runnable>, index: usize, parker:
          while local.pop().is_some() {}
      };
 
@@ -383,7 +699,7 @@ diff --git a/crates/common/src/thread_pool.rs b/crates/common/src/thread_pool.rs
          if let Some(runnable) = find_task(&inner, &local, index) {
              runnable.run();
              continue;
-@@ -303,7 +312,7 @@
+@@ -303,7 +312,7 @@ fn worker_loop(inner: Arc<Inner>, local: Worker<Runnable>, index: usize, parker:
              continue;
          }
 
@@ -392,7 +708,7 @@ diff --git a/crates/common/src/thread_pool.rs b/crates/common/src/thread_pool.rs
              state.parked.store(false, Ordering::SeqCst);
              break;
          }
-@@ -354,16 +363,12 @@
+@@ -354,16 +363,12 @@ where
  {
      let inner = pool.inner.clone();
      let schedule = move |runnable: Runnable| {
@@ -413,3 +729,156 @@ diff --git a/crates/common/src/thread_pool.rs b/crates/common/src/thread_pool.rs
          // Scan for an idle worker and claim it for this notification. The
          // `load` is a cheap filter; the `compare_exchange` is what makes the
          // claim race-free against other concurrent producers. Stops at the
+diff --git a/crates/hash/Cargo.toml b/crates/hash/Cargo.toml
+--- a/crates/hash/Cargo.toml
++++ b/crates/hash/Cargo.toml
+@@ -4,12 +4,14 @@ version = "0.1.0-alpha.6"
+ edition = "2024"
+
+ [features]
++poseidon2-koalabear = ["mpz-circuits/poseidon2-koalabear", "dep:bincode"]
+ default = ["sha256", "blake3", "keccak256"]
+ sha256 = ["mpz-circuits/sha2"]
+ blake3 = ["mpz-circuits/blake3", "dep:blake3"]
+ keccak256 = ["mpz-circuits/keccak"]
+
+ [dependencies]
++bincode = { workspace = true, optional = true }
+ mpz-core = { workspace = true }
+ mpz-circuits = { workspace = true }
+ mpz-vm-core = { workspace = true }
+diff --git a/crates/hash/src/lib.rs b/crates/hash/src/lib.rs
+--- a/crates/hash/src/lib.rs
++++ b/crates/hash/src/lib.rs
+@@ -4,3 +4,5 @@ pub mod blake3;
+ pub mod keccak256;
+ #[cfg(feature = "sha256")]
+ pub mod sha256;
++#[cfg(feature = "poseidon2-koalabear")]
++pub mod poseidon2_koalabear;
+diff --git b/crates/hash/src/poseidon2_koalabear.rs b/crates/hash/src/poseidon2_koalabear.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/hash/src/poseidon2_koalabear.rs
+@@ -0,0 +1,121 @@
++//! poseidon2-koalabear-16-pad10-v1 over authenticated byte references.
++
++use mpz_circuits::{KOALABEAR_INCREMENT, POSEIDON2_KOALABEAR};
++use mpz_vm_core::{
++    Call, CallError, CallableExt, Vm, VmError,
++    memory::{
++        Array, FromRaw, MemoryExt, Slice, ToRaw, Vector, ViewExt,
++        binary::{Binary, U8, U32},
++    },
++};
++
++/// Errors at the authenticated byte-hash boundary.
++#[derive(Debug, thiserror::Error)]
++pub enum Poseidon2Error {
++    /// VM operation failed.
++    #[error("KoalaBear VM: {0}")]
++    Vm(#[from] VmError),
++    /// Generated circuit failed to decode.
++    #[error("KoalaBear circuit: {0}")]
++    Circuit(#[source] &'static bincode::ErrorKind),
++    /// Circuit arguments have an incorrect length.
++    #[error("KoalaBear call: {0}")]
++    Call(#[from] CallError),
++}
++
++/// Partition-independent byte hash; the caller owns the input references.
++#[derive(Default)]
++pub struct Poseidon2KoalaBear {
++    inputs: Vec<Slice>,
++}
++
++fn bytes(mut input: Slice) -> impl Iterator<Item = Slice> {
++    std::iter::from_fn(move || {
++        if input.len() == 0 {
++            return None;
++        }
++        // PROOF: input references and every remainder contain whole bytes.
++        let (byte, rest) = input.split_at(8);
++        input = rest;
++        Some(byte)
++    })
++}
++
++impl Poseidon2KoalaBear {
++    /// Appends bytes without introducing a partition delimiter.
++    pub fn update(&mut self, input: &Vector<U8>) {
++        self.inputs.push(input.to_raw());
++    }
++
++    /// Finalizes the frozen byte encoding and padded sponge.
++    pub fn finalize(self, vm: &mut dyn Vm<Binary>) -> Result<Array<U8, 32>, Poseidon2Error> {
++        let circuit = match &*POSEIDON2_KOALABEAR {
++            Ok(circuit) => circuit,
++            Err(error) => return Err(Poseidon2Error::Circuit(error)),
++        };
++        let increment = match &*KOALABEAR_INCREMENT {
++            Ok(circuit) => circuit,
++            Err(error) => return Err(Poseidon2Error::Circuit(error)),
++        };
++        let domain = b"tlsn/poseidon2/koalabear/16/pad10/v1";
++        let prefix = vm.alloc_vec::<U8>(domain.len())?;
++        vm.mark_public(prefix)?;
++        vm.assign(prefix, domain.to_vec())?;
++        vm.commit(prefix)?;
++        let zeros: Array<U32, 16> = vm.alloc()?;
++        vm.mark_public(zeros)?;
++        vm.assign(zeros, [0u32; 16])?;
++        vm.commit(zeros)?;
++        let one: U32 = vm.alloc()?;
++        vm.mark_public(one)?;
++        vm.assign(one, 1u32)?;
++        vm.commit(one)?;
++        // PROOF: typed U32 storage contains at least eight bits.
++        let zero_byte = zeros.to_raw().split_at(8).0;
++        let marker = one.to_raw().split_at(8).0;
++        let mut input = bytes(prefix.to_raw())
++            .chain(self.inputs.into_iter().flat_map(bytes))
++            .chain([marker])
++            .peekable();
++        let mut state = zeros;
++        loop {
++            let mut call = Call::builder(circuit.clone());
++            let mut used = 0;
++            while used < 8 && input.peek().is_some() {
++                for _ in 0..3 {
++                    // Zero-fill the final three-byte group.
++                    let byte = match input.next() {
++                        Some(byte) => byte,
++                        None => zero_byte,
++                    };
++                    call = call.arg(byte);
++                }
++                call = call.arg(zero_byte);
++                used += 1;
++            }
++            let last = input.peek().is_none();
++            // PROOF: the state is exactly sixteen U32 words.
++            let capacity = state.to_raw().split_at(8 * 32).1;
++            if used < 8 {
++                // PROOF: used < 8 bounds the zero suffix within the sixteen-word buffer.
++                call = call
++                    .arg(one)
++                    .arg(zeros.to_raw().split_at((7 - used) * 32).0)
++                    .arg(capacity);
++            } else if last {
++                let (first, rest) = capacity.split_at(32);
++                let first: U32 = vm.call(Call::builder(increment.clone()).arg(first).build()?)?;
++                call = call.arg(first).arg(rest);
++            } else {
++                call = call.arg(capacity);
++            }
++            state = vm.call(call.build()?)?;
++            if last {
++                // PROOF: the first eight U32 words occupy exactly 32 bytes in Binary's LSB0 encoding.
++                return Ok(<Array<U8, 32> as FromRaw<Binary>>::from_raw(
++                    state.to_raw().split_at(8 * 32).0,
++                ));
++            }
++        }
++    }
++}

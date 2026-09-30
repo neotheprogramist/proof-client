@@ -123,6 +123,9 @@ fn evidence(
             commitment.direction,
             if commitment.hash.alg == tlsn::hash::HashAlgId::BLAKE3 {
                 "BLAKE3".to_owned()
+            } else if commitment.hash.alg == tlsn::hash::HashAlgId::POSEIDON2_KOALABEAR_16_PAD10_V1
+            {
+                proof_client_core::tls::commitment::CommitmentHash::Poseidon2KoalaBear.to_string()
             } else {
                 commitment.hash.alg.to_string()
             }

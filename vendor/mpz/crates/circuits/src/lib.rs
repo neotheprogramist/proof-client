@@ -1,5 +1,8 @@
 //! Circuits and circuit builder types.
 
+#[cfg(feature = "poseidon2-koalabear")]
+pub use mpz_circuits_data::{KOALABEAR_INCREMENT, POSEIDON2_KOALABEAR};
+
 #[cfg(feature = "aes")]
 pub use mpz_circuits_data::AES128;
 

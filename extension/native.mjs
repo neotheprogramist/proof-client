@@ -84,7 +84,7 @@ export function active(state) {
   return state.phase === phases.running || state.phase === phases.waiting;
 }
 /** @param {State} state @param {Transition} event */
-export function step(state, event) {
+function step(state, event) {
   if (!active(state)) return state;
   switch (event.event) {
     case tags.ready:
@@ -101,7 +101,6 @@ export function step(state, event) {
         case phases.running:
           if (state.command === "serve") throw new NativeError("Serve completed before ready");
           break;
-        // Stryker disable next-line ConditionalExpression: deleting this empty final case is equivalent; it records the closed phase union.
         case phases.waiting:
           break;
       }
@@ -114,11 +113,9 @@ export function step(state, event) {
       return Object.freeze({ phase: phases.failed, error: new NativeError(event.message) });
     case "cancel":
       return Object.freeze({ phase: phases.cancelled });
-    // Stryker disable next-line all: the closed event union is checked by TypeScript.
     default: {
       /** @type {never} */
       const unreachable = event;
-      // Stryker disable next-line all: unreachable for the closed event union.
       throw new NativeError(`Unhandled event: ${unreachable}`);
     }
   }
@@ -155,11 +152,9 @@ export async function invoke(args, observe, signal) {
       case phases.idle:
       case phases.waiting:
         break;
-      // Stryker disable next-line all: TypeScript checks the closed state union.
       default: {
         /** @type {never} */
         const unreachable = state;
-        // Stryker disable next-line all: unreachable for the closed state union.
         throw new NativeError(`Unhandled state: ${unreachable}`);
       }
     }

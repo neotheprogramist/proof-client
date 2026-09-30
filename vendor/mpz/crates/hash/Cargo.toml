@@ -4,12 +4,14 @@ version = "0.1.0-alpha.6"
 edition = "2024"
 
 [features]
+poseidon2-koalabear = ["mpz-circuits/poseidon2-koalabear", "dep:bincode"]
 default = ["sha256", "blake3", "keccak256"]
 sha256 = ["mpz-circuits/sha2"]
 blake3 = ["mpz-circuits/blake3", "dep:blake3"]
 keccak256 = ["mpz-circuits/keccak"]
 
 [dependencies]
+bincode = { workspace = true, optional = true }
 mpz-core = { workspace = true }
 mpz-circuits = { workspace = true }
 mpz-vm-core = { workspace = true }

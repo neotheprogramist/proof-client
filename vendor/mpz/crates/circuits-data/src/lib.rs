@@ -4,6 +4,20 @@ use mpz_circuits_core::Circuit;
 use once_cell::sync::Lazy;
 use std::sync::Arc;
 
+/// Stock KoalaBear width-16 permutation, decoded from build output.
+#[cfg(feature = "poseidon2-koalabear")]
+pub static POSEIDON2_KOALABEAR: Lazy<Result<Arc<Circuit>, bincode::Error>> = Lazy::new(|| {
+    bincode::deserialize(include_bytes!(concat!(env!("OUT_DIR"), "/poseidon2_koalabear.bin")))
+        .map(Arc::new)
+});
+
+/// KoalaBear field increment for full-block padding.
+#[cfg(feature = "poseidon2-koalabear")]
+pub static KOALABEAR_INCREMENT: Lazy<Result<Arc<Circuit>, bincode::Error>> = Lazy::new(|| {
+    bincode::deserialize(include_bytes!(concat!(env!("OUT_DIR"), "/koalabear_increment.bin")))
+        .map(Arc::new)
+});
+
 /// AES-128 circuit.
 ///
 /// The circuit has the following signature:

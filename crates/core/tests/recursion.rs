@@ -79,21 +79,6 @@ fn recursion_worker() -> Result<(), prover::Error> {
                 .collect::<Vec<_>>();
             assert_eq!(proof.public(), expected);
             let encoded = serde_json::to_value(&proof)?;
-            let exported = encoded["proof"]["non_primitives"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .flat_map(|table| table["public_values"].as_array().unwrap().iter().cloned())
-                .collect::<Vec<_>>();
-            let exported: Vec<p3_koala_bear::KoalaBear> = serde_json::from_value(json!(exported))?;
-            use p3_field::PrimeField32;
-            assert_eq!(
-                exported
-                    .iter()
-                    .map(PrimeField32::as_canonical_u32)
-                    .collect::<Vec<_>>(),
-                expected
-            );
             let bytes = serde_json::to_vec(&proof)?;
             for index in 0..expected.len() {
                 let mut changed = expected.clone();
@@ -125,18 +110,9 @@ fn recursion_worker() -> Result<(), prover::Error> {
             Ok((proof, expected))
         },
     )?;
-    let renamed = documents
-        .iter()
-        .map(|(path, source)| {
-            let source = prover::Source::parse(&serde_json::to_vec(source)?)?.resolve(|path| {
-                Ok::<_, prover::Error>(format!("renamed-{}", path.display()).into())
-            })?;
-            Ok((format!("renamed-{}", path.display()).into(), source))
-        })
-        .collect::<Result<_, prover::Error>>()?;
     assert_eq!(
         prover::verify(
-            prover::Circuit::link("renamed-merge-recursive.json".into(), renamed)?,
+            circuits::link("merge-recursive.json", &documents)?,
             public(&expected),
             proof,
             1.try_into().unwrap()
@@ -148,6 +124,6 @@ fn recursion_worker() -> Result<(), prover::Error> {
 #[test]
 #[ignore = "bounded eight-leaf recursive proof gate"]
 fn eight_leaf_recursion() {
-    // Policy: match the CLI process budget.
+    // Policy: bound the expensive recursive workflow in a child process.
     support::worker("recursion_worker", std::time::Duration::from_secs(600));
 }

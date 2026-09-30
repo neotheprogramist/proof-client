@@ -1,7 +1,17 @@
 diff --git a/Cargo.toml b/Cargo.toml
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -58,7 +58,7 @@
+@@ -48,6 +48,9 @@ panic = "abort"
+ codegen-units = 1
+
+ [workspace.dependencies]
++p3-field = "=0.8.0"
++p3-koala-bear = "=0.8.0"
++p3-symmetric = "=0.8.0"
+ tls-server-fixture = { path = "crates/tls/server-fixture" }
+ tlsn-attestation = { path = "crates/attestation" }
+ tlsn-cipher = { path = "crates/components/cipher" }
+@@ -58,7 +61,7 @@ tlsn-formats = { path = "crates/formats" }
  tlsn-hmac-sha256 = { path = "crates/components/hmac-sha256" }
  tlsn-key-exchange = { path = "crates/components/key-exchange" }
  tlsn-mpc-tls = { path = "crates/mpc-tls" }
@@ -10,7 +20,7 @@ diff --git a/Cargo.toml b/Cargo.toml
  tlsn-server-fixture = { path = "crates/server-fixture/server" }
  tlsn-server-fixture-certs = { path = "crates/server-fixture/certs" }
  tlsn-tls-client = { path = "crates/tls/client" }
-@@ -71,21 +71,21 @@
+@@ -71,21 +74,21 @@ tlsn-sdk-core = { path = "crates/sdk-core" }
  tlsn-wasm = { path = "crates/wasm" }
  tlsn = { path = "crates/tlsn" }
 
@@ -47,7 +57,7 @@ diff --git a/Cargo.toml b/Cargo.toml
 
  futures-plex = { git = "https://github.com/tlsnotary/tlsn-utils", rev = "64722f7" }
  rangeset = { version = "0.4" }
-@@ -138,6 +138,8 @@
+@@ -138,6 +141,8 @@ p256 = { version = "0.13" }
  pin-project-lite = { version = "0.2" }
  pollster = { version = "0.4" }
  rand = { version = "0.9" }
@@ -59,7 +69,7 @@ diff --git a/Cargo.toml b/Cargo.toml
 diff --git a/crates/components/key-exchange/Cargo.toml b/crates/components/key-exchange/Cargo.toml
 --- a/crates/components/key-exchange/Cargo.toml
 +++ b/crates/components/key-exchange/Cargo.toml
-@@ -38,6 +38,7 @@
+@@ -38,6 +38,7 @@ rand06-compat = { workspace = true }
  tokio = { workspace = true, features = ["sync"] }
 
  [dev-dependencies]
@@ -70,7 +80,7 @@ diff --git a/crates/components/key-exchange/Cargo.toml b/crates/components/key-e
 diff --git a/crates/components/key-exchange/src/exchange.rs b/crates/components/key-exchange/src/exchange.rs
 --- a/crates/components/key-exchange/src/exchange.rs
 +++ b/crates/components/key-exchange/src/exchange.rs
-@@ -477,6 +477,7 @@
+@@ -477,6 +477,7 @@ mod tests {
      use p256::{NonZeroScalar, PublicKey, SecretKey};
      use rand::rngs::StdRng;
      use rand_core::SeedableRng;
@@ -78,7 +88,7 @@ diff --git a/crates/components/key-exchange/src/exchange.rs b/crates/components/
      use rstest::*;
 
      impl<C0, C1> MpcKeyExchange<C0, C1> {
-@@ -660,7 +661,7 @@
+@@ -660,7 +661,7 @@ mod tests {
          let client_public_key = leader.client_key().unwrap();
          assert_eq!(client_public_key, expected_client_public_key);
 
@@ -87,34 +97,134 @@ diff --git a/crates/components/key-exchange/src/exchange.rs b/crates/components/
 
          let (leader_err, follower_err) = tokio::join!(
              async {
-diff --git a/crates/examples-zk/prover.rs b/crates/examples-zk/prover.rs
---- a/crates/examples-zk/prover.rs
-+++ b/crates/examples-zk/prover.rs
-@@ -67,7 +67,7 @@
-         .host();
+diff --git a/crates/core/Cargo.toml b/crates/core/Cargo.toml
+--- a/crates/core/Cargo.toml
++++ b/crates/core/Cargo.toml
+@@ -12,6 +12,7 @@ edition = "2024"
+ workspace = true
 
-     // Create a session with the verifier.
--    let session = Session::new(verifier_socket.compat());
-+    let session = Session::new(verifier_socket.compat())?;
-     let (driver, mut handle) = session.split();
+ [features]
++hash-poseidon2-koalabear = ["dep:p3-field", "dep:p3-koala-bear", "dep:p3-symmetric"]
+ default = []
+ mozilla-certs = ["dep:webpki-root-certs", "dep:webpki-roots"]
+ fixtures = [
+@@ -23,6 +24,9 @@ fixtures = [
+ ]
 
-     // Spawn the session driver to run in the background.
-diff --git a/crates/examples-zk/verifier.rs b/crates/examples-zk/verifier.rs
---- a/crates/examples-zk/verifier.rs
-+++ b/crates/examples-zk/verifier.rs
-@@ -28,7 +28,7 @@
-     socket: T,
- ) -> Result<PartialTranscript> {
-     // Create a session with the prover.
--    let session = Session::new(socket.compat());
-+    let session = Session::new(socket.compat())?;
-     let (driver, mut handle) = session.split();
+ [dependencies]
++p3-field = { workspace = true, optional = true }
++p3-koala-bear = { workspace = true, optional = true }
++p3-symmetric = { workspace = true, optional = true }
+ tlsn-data-fixtures = { workspace = true, optional = true }
+ tlsn-tls-core = { workspace = true, features = ["serde"] }
 
-     // Spawn the session driver to run in the background.
+diff --git b/crates/core/src/hash/poseidon2_koalabear.rs b/crates/core/src/hash/poseidon2_koalabear.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/core/src/hash/poseidon2_koalabear.rs
+@@ -0,0 +1,51 @@
++use p3_field::{PrimeCharacteristicRing, PrimeField32};
++use p3_koala_bear::{KoalaBear, default_koalabear_poseidon2_16};
++use p3_symmetric::{CryptographicHasher, Increment, Pad10Sponge};
++
++use super::{Hash, HashAlgId, HashAlgorithm};
++
++/// The frozen poseidon2-koalabear-16-pad10-v1 byte hash.
++#[derive(Debug, Default, Clone, Copy)]
++pub struct Poseidon2KoalaBear;
++
++impl HashAlgorithm for Poseidon2KoalaBear {
++    fn id(&self) -> HashAlgId {
++        HashAlgId::POSEIDON2_KOALABEAR_16_PAD10_V1
++    }
++
++    fn hash(&self, data: &[u8]) -> Hash {
++        self.hash_prefixed(&[], data)
++    }
++
++    fn hash_prefixed(&self, prefix: &[u8], data: &[u8]) -> Hash {
++        let mut bytes = b"tlsn/poseidon2/koalabear/16/pad10/v1"
++            .iter()
++            .chain(prefix)
++            .chain(data)
++            .copied()
++            .chain([1]);
++        let words = std::iter::from_fn(|| {
++            bytes.next().map(|first| {
++                let mut packed = [0; 4];
++                packed[0] = first;
++                for byte in &mut packed[1..3] {
++                    if let Some(next) = bytes.next() {
++                        *byte = next;
++                    }
++                }
++                KoalaBear::from_u32(u32::from_le_bytes(packed))
++            })
++        });
++        // PROOF: ONE is nonzero; Increment is a derangement over KoalaBear.
++        let sponge = Pad10Sponge::<_, _, _, 16, 8, 8>::new(
++            default_koalabear_poseidon2_16(),
++            Increment::new(KoalaBear::ONE),
++        );
++        let words = sponge.hash_iter(words);
++        let mut digest = [0; 32];
++        for (output, word) in digest.chunks_exact_mut(4).zip(words) {
++            output.copy_from_slice(&word.as_canonical_u32().to_le_bytes());
++        }
++        Hash::new(&digest)
++    }
++}
+diff --git a/crates/core/src/hash.rs b/crates/core/src/hash.rs
+--- a/crates/core/src/hash.rs
++++ b/crates/core/src/hash.rs
+@@ -5,6 +5,11 @@ use std::{collections::HashMap, fmt::Display};
+ use rand::{distr::StandardUniform, prelude::Distribution};
+ use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
++#[cfg(feature = "hash-poseidon2-koalabear")]
++mod poseidon2_koalabear;
++#[cfg(feature = "hash-poseidon2-koalabear")]
++pub use poseidon2_koalabear::Poseidon2KoalaBear;
++
+ /// Maximum length of a hash value.
+ const MAX_LEN: usize = 64;
+
+@@ -25,6 +30,8 @@ impl Default for HashProvider {
+         algs.insert(HashAlgId::SHA256, Box::new(Sha256::default()));
+         algs.insert(HashAlgId::BLAKE3, Box::new(Blake3::default()));
+         algs.insert(HashAlgId::KECCAK256, Box::new(Keccak256::default()));
++        #[cfg(feature = "hash-poseidon2-koalabear")]
++        algs.insert(HashAlgId::POSEIDON2_KOALABEAR_16_PAD10_V1, Box::new(Poseidon2KoalaBear));
+
+         Self { algs }
+     }
+@@ -66,6 +73,8 @@ impl HashAlgId {
+     pub const BLAKE3: Self = Self(2);
+     /// Keccak-256 hash algorithm.
+     pub const KECCAK256: Self = Self(3);
++    /// Private suite: poseidon2-koalabear-16-pad10-v1.
++    pub const POSEIDON2_KOALABEAR_16_PAD10_V1: Self = Self(128);
+
+     /// Creates a new hash algorithm identifier.
+     ///
+diff --git a/crates/core/src/transcript/proof.rs b/crates/core/src/transcript/proof.rs
+--- a/crates/core/src/transcript/proof.rs
++++ b/crates/core/src/transcript/proof.rs
+@@ -30,6 +30,10 @@ const DEFAULT_COMMITMENT_KINDS: &[TranscriptCommitmentKind] = &[
+     TranscriptCommitmentKind::Hash {
+         alg: HashAlgId::KECCAK256,
+     },
++    #[cfg(feature = "hash-poseidon2-koalabear")]
++    TranscriptCommitmentKind::Hash {
++        alg: HashAlgId::POSEIDON2_KOALABEAR_16_PAD10_V1,
++    },
+ ];
+
+ /// Proof of the contents of a transcript.
 diff --git a/crates/examples/attestation/prove.rs b/crates/examples/attestation/prove.rs
 --- a/crates/examples/attestation/prove.rs
 +++ b/crates/examples/attestation/prove.rs
-@@ -79,7 +79,7 @@
+@@ -79,7 +79,7 @@ async fn prover<S: AsyncWrite + AsyncRead + Send + Sync + Unpin + 'static>(
          .unwrap_or(DEFAULT_FIXTURE_PORT);
 
      // Create a session with the notary.
@@ -123,7 +233,7 @@ diff --git a/crates/examples/attestation/prove.rs b/crates/examples/attestation/
      let (driver, mut handle) = session.split();
 
      // Spawn the session driver to run in the background.
-@@ -282,7 +282,7 @@
+@@ -282,7 +282,7 @@ async fn notary<S: AsyncWrite + AsyncRead + Send + Sync + Unpin + 'static>(
      socket: S,
  ) -> Result<()> {
      // Create a session with the prover.
@@ -135,7 +245,7 @@ diff --git a/crates/examples/attestation/prove.rs b/crates/examples/attestation/
 diff --git a/crates/examples/basic/basic.rs b/crates/examples/basic/basic.rs
 --- a/crates/examples/basic/basic.rs
 +++ b/crates/examples/basic/basic.rs
-@@ -76,7 +76,7 @@
+@@ -76,7 +76,7 @@ async fn prover<T: AsyncWrite + AsyncRead + Send + Unpin + 'static>(
      let server_domain = uri.authority().unwrap().host();
 
      // Create a session with the verifier.
@@ -144,7 +254,7 @@ diff --git a/crates/examples/basic/basic.rs b/crates/examples/basic/basic.rs
      let (driver, mut handle) = session.split();
 
      // Spawn the session driver to run in the background.
-@@ -185,7 +185,7 @@
+@@ -185,7 +185,7 @@ async fn verifier<T: AsyncWrite + AsyncRead + Send + Sync + Unpin + 'static>(
      socket: T,
  ) -> Result<PartialTranscript> {
      // Create a session with the prover.
@@ -156,7 +266,7 @@ diff --git a/crates/examples/basic/basic.rs b/crates/examples/basic/basic.rs
 diff --git a/crates/examples/proxy/proxy.rs b/crates/examples/proxy/proxy.rs
 --- a/crates/examples/proxy/proxy.rs
 +++ b/crates/examples/proxy/proxy.rs
-@@ -71,7 +71,7 @@
+@@ -71,7 +71,7 @@ async fn prover<T: AsyncWrite + AsyncRead + Send + Unpin + 'static>(
      let server_domain = uri.authority().unwrap().host();
 
      // Create a session with the verifier.
@@ -165,7 +275,7 @@ diff --git a/crates/examples/proxy/proxy.rs b/crates/examples/proxy/proxy.rs
      let (driver, mut handle) = session.split();
 
      // Spawn the session driver to run in the background.
-@@ -176,7 +176,7 @@
+@@ -176,7 +176,7 @@ async fn verifier<T: AsyncWrite + AsyncRead + Send + Unpin + 'static>(
      server_addr: SocketAddr,
  ) -> Result<PartialTranscript> {
      // Create a session with the prover.
@@ -174,10 +284,34 @@ diff --git a/crates/examples/proxy/proxy.rs b/crates/examples/proxy/proxy.rs
      let (driver, mut handle) = session.split();
 
      // Spawn the session driver to run in the background.
+diff --git a/crates/examples-zk/prover.rs b/crates/examples-zk/prover.rs
+--- a/crates/examples-zk/prover.rs
++++ b/crates/examples-zk/prover.rs
+@@ -67,7 +67,7 @@ pub async fn prover<T: AsyncWrite + AsyncRead + Send + Unpin + 'static>(
+         .host();
+
+     // Create a session with the verifier.
+-    let session = Session::new(verifier_socket.compat());
++    let session = Session::new(verifier_socket.compat())?;
+     let (driver, mut handle) = session.split();
+
+     // Spawn the session driver to run in the background.
+diff --git a/crates/examples-zk/verifier.rs b/crates/examples-zk/verifier.rs
+--- a/crates/examples-zk/verifier.rs
++++ b/crates/examples-zk/verifier.rs
+@@ -28,7 +28,7 @@ pub async fn verifier<T: AsyncWrite + AsyncRead + Send + Sync + Unpin + 'static>
+     socket: T,
+ ) -> Result<PartialTranscript> {
+     // Create a session with the prover.
+-    let session = Session::new(socket.compat());
++    let session = Session::new(socket.compat())?;
+     let (driver, mut handle) = session.split();
+
+     // Spawn the session driver to run in the background.
 diff --git a/crates/harness/executor/src/bench/prover.rs b/crates/harness/executor/src/bench/prover.rs
 --- a/crates/harness/executor/src/bench/prover.rs
 +++ b/crates/harness/executor/src/bench/prover.rs
-@@ -29,7 +29,7 @@
+@@ -29,7 +29,7 @@ pub async fn bench_prover(provider: &IoProvider, config: &Bench) -> Result<Prove
      let sent = verifier_io.sent();
      let recv = verifier_io.recv();
 
@@ -189,7 +323,7 @@ diff --git a/crates/harness/executor/src/bench/prover.rs b/crates/harness/execut
 diff --git a/crates/harness/executor/src/bench/verifier.rs b/crates/harness/executor/src/bench/verifier.rs
 --- a/crates/harness/executor/src/bench/verifier.rs
 +++ b/crates/harness/executor/src/bench/verifier.rs
-@@ -13,7 +13,7 @@
+@@ -13,7 +13,7 @@ use crate::{IoProvider, spawn};
 
  pub async fn bench_verifier(provider: &IoProvider, _config: &Bench) -> Result<()> {
      let io = provider.provide_proto_io().await?;
@@ -201,7 +335,7 @@ diff --git a/crates/harness/executor/src/bench/verifier.rs b/crates/harness/exec
 diff --git a/crates/harness/executor/test_plugins/basic.rs b/crates/harness/executor/test_plugins/basic.rs
 --- a/crates/harness/executor/test_plugins/basic.rs
 +++ b/crates/harness/executor/test_plugins/basic.rs
-@@ -34,7 +34,7 @@
+@@ -34,7 +34,7 @@ crate::test!("proxy", prover_proxy, verifier);
 
  async fn prover_mpc(provider: &IoProvider) {
      let io = provider.provide_proto_io().await.unwrap();
@@ -210,7 +344,7 @@ diff --git a/crates/harness/executor/test_plugins/basic.rs b/crates/harness/exec
      let prover = session
          .new_prover(ProverConfig::builder().build().unwrap())
          .unwrap();
-@@ -65,7 +65,7 @@
+@@ -65,7 +65,7 @@ async fn prover_mpc(provider: &IoProvider) {
 
  async fn prover_proxy(provider: &IoProvider) {
      let io = provider.provide_proto_io().await.unwrap();
@@ -219,7 +353,7 @@ diff --git a/crates/harness/executor/test_plugins/basic.rs b/crates/harness/exec
      let prover = session
          .new_prover(ProverConfig::builder().build().unwrap())
          .unwrap();
-@@ -167,7 +167,7 @@
+@@ -167,7 +167,7 @@ async fn finish_prover(
 
  async fn verifier(provider: &IoProvider) {
      let io = provider.provide_proto_io().await.unwrap();
@@ -231,7 +365,7 @@ diff --git a/crates/harness/executor/test_plugins/basic.rs b/crates/harness/exec
 diff --git a/crates/mpc-tls/Cargo.toml b/crates/mpc-tls/Cargo.toml
 --- a/crates/mpc-tls/Cargo.toml
 +++ b/crates/mpc-tls/Cargo.toml
-@@ -45,6 +45,7 @@
+@@ -45,6 +45,7 @@ serde = { workspace = true }
  thiserror = { workspace = true }
  tracing = { workspace = true }
  rand = { workspace = true }
@@ -242,7 +376,7 @@ diff --git a/crates/mpc-tls/Cargo.toml b/crates/mpc-tls/Cargo.toml
 diff --git a/crates/mpc-tls/src/follower.rs b/crates/mpc-tls/src/follower.rs
 --- a/crates/mpc-tls/src/follower.rs
 +++ b/crates/mpc-tls/src/follower.rs
-@@ -53,7 +53,7 @@
+@@ -53,7 +53,7 @@ impl MpcTlsFollower {
          CS: RCOTSender<Block> + Flush + Send + Sync + 'static,
          CR: RCOTReceiver<bool, Block> + Flush + Send + Sync + 'static,
      {
@@ -254,7 +388,7 @@ diff --git a/crates/mpc-tls/src/follower.rs b/crates/mpc-tls/src/follower.rs
 diff --git a/crates/mpc-tls/src/leader.rs b/crates/mpc-tls/src/leader.rs
 --- a/crates/mpc-tls/src/leader.rs
 +++ b/crates/mpc-tls/src/leader.rs
-@@ -74,7 +74,7 @@
+@@ -74,7 +74,7 @@ impl MpcTlsLeader {
          CS: RCOTSender<Block> + Flush + Send + Sync + 'static,
          CR: RCOTReceiver<bool, Block> + Flush + Send + Sync + 'static,
      {
@@ -266,7 +400,7 @@ diff --git a/crates/mpc-tls/src/leader.rs b/crates/mpc-tls/src/leader.rs
 diff --git a/crates/mpc-tls/src/record_layer/aead/aes_gcm.rs b/crates/mpc-tls/src/record_layer/aead/aes_gcm.rs
 --- a/crates/mpc-tls/src/record_layer/aead/aes_gcm.rs
 +++ b/crates/mpc-tls/src/record_layer/aead/aes_gcm.rs
-@@ -459,7 +459,7 @@
+@@ -459,7 +459,7 @@ mod tests {
      use mpz_ideal_vm::IdealVm;
      use mpz_memory_core::binary::U8;
      use mpz_share_conversion::ideal::ideal_share_convert;
@@ -278,7 +412,7 @@ diff --git a/crates/mpc-tls/src/record_layer/aead/aes_gcm.rs b/crates/mpc-tls/sr
 diff --git a/crates/mpc-tls/src/record_layer/aead/ghash.rs b/crates/mpc-tls/src/record_layer/aead/ghash.rs
 --- a/crates/mpc-tls/src/record_layer/aead/ghash.rs
 +++ b/crates/mpc-tls/src/record_layer/aead/ghash.rs
-@@ -346,7 +346,7 @@
+@@ -346,7 +346,7 @@ mod tests {
      use mpz_share_conversion::ideal::{
          IdealShareConvertReceiver, IdealShareConvertSender, ideal_share_convert,
      };
@@ -290,7 +424,7 @@ diff --git a/crates/mpc-tls/src/record_layer/aead/ghash.rs b/crates/mpc-tls/src/
 diff --git a/crates/sdk-core/src/prover.rs b/crates/sdk-core/src/prover.rs
 --- a/crates/sdk-core/src/prover.rs
 +++ b/crates/sdk-core/src/prover.rs
-@@ -111,7 +111,7 @@
+@@ -111,7 +111,7 @@ impl SdkProver {
 
          info!("connecting to verifier");
 
@@ -302,7 +436,7 @@ diff --git a/crates/sdk-core/src/prover.rs b/crates/sdk-core/src/prover.rs
 diff --git a/crates/sdk-core/src/verifier.rs b/crates/sdk-core/src/verifier.rs
 --- a/crates/sdk-core/src/verifier.rs
 +++ b/crates/sdk-core/src/verifier.rs
-@@ -92,7 +92,7 @@
+@@ -92,7 +92,7 @@ impl SdkVerifier {
 
          info!("connecting to prover");
 
@@ -314,7 +448,15 @@ diff --git a/crates/sdk-core/src/verifier.rs b/crates/sdk-core/src/verifier.rs
 diff --git a/crates/tlsn/Cargo.toml b/crates/tlsn/Cargo.toml
 --- a/crates/tlsn/Cargo.toml
 +++ b/crates/tlsn/Cargo.toml
-@@ -52,6 +52,7 @@
+@@ -17,6 +17,7 @@ rayon = ["mpz-zk/rayon", "mpz-garble/rayon"]
+ web = ["dep:web-spawn"]
+ hash-keccak256 = ["mpz-hash/keccak256"]
+ hash-blake3 = ["mpz-hash/blake3"]
++hash-poseidon2-koalabear = ["tlsn-core/hash-poseidon2-koalabear", "mpz-hash/poseidon2-koalabear"]
+
+ [dependencies]
+ tlsn-attestation = { workspace = true }
+@@ -52,6 +53,7 @@ futures = { workspace = true }
  opaque-debug = { workspace = true }
  pin-project-lite = { workspace = true }
  rand = { workspace = true }
@@ -325,7 +467,7 @@ diff --git a/crates/tlsn/Cargo.toml b/crates/tlsn/Cargo.toml
 diff --git a/crates/tlsn/src/deps/prover.rs b/crates/tlsn/src/deps/prover.rs
 --- a/crates/tlsn/src/deps/prover.rs
 +++ b/crates/tlsn/src/deps/prover.rs
-@@ -27,7 +27,7 @@
+@@ -27,7 +27,7 @@ cfg_select! {
          use mpz_garble::protocol::semihonest::Garbler;
          use mpz_ot::cot::DerandCOTSender;
          use mpz_zk::Prover;
@@ -334,7 +476,7 @@ diff --git a/crates/tlsn/src/deps/prover.rs b/crates/tlsn/src/deps/prover.rs
 
          pub(crate) type ProverMpc =
              Garbler<DerandCOTSender<SharedRCOTSender<kos::Sender<co::Receiver>, Block>>>;
-@@ -51,7 +51,7 @@
+@@ -51,7 +51,7 @@ impl std::fmt::Debug for ProverMpcDeps {
 
  impl ProverMpcDeps {
      pub(crate) fn new(config: &MpcTlsConfig, ctx: Context) -> Self {
@@ -343,7 +485,7 @@ diff --git a/crates/tlsn/src/deps/prover.rs b/crates/tlsn/src/deps/prover.rs
          let delta = Delta::new(Block::random(&mut rng));
 
          let base_ot_send = co::Sender::default();
-@@ -142,7 +142,7 @@
+@@ -142,7 +142,7 @@ impl ProverProxyDeps {
          let vm = cfg_select! {
              tlsn_insecure => { mpz_ideal_vm::IdealVm::new() }
              _ => {{
@@ -355,7 +497,7 @@ diff --git a/crates/tlsn/src/deps/prover.rs b/crates/tlsn/src/deps/prover.rs
 diff --git a/crates/tlsn/src/deps/verifier.rs b/crates/tlsn/src/deps/verifier.rs
 --- a/crates/tlsn/src/deps/verifier.rs
 +++ b/crates/tlsn/src/deps/verifier.rs
-@@ -51,7 +51,7 @@
+@@ -51,7 +51,7 @@ impl std::fmt::Debug for VerifierMpcDeps {
 
  impl VerifierMpcDeps {
      pub(crate) fn new(config: &MpcTlsConfig, ctx: Context) -> Self {
@@ -364,7 +506,7 @@ diff --git a/crates/tlsn/src/deps/verifier.rs b/crates/tlsn/src/deps/verifier.rs
 
          let delta = Delta::random(&mut rng);
          let base_ot_send = co::Sender::default();
-@@ -140,7 +140,7 @@
+@@ -140,7 +140,7 @@ impl VerifierProxyDeps {
          let vm = cfg_select! {
              tlsn_insecure => { mpz_ideal_vm::IdealVm::new() }
              _ => {{
@@ -376,7 +518,7 @@ diff --git a/crates/tlsn/src/deps/verifier.rs b/crates/tlsn/src/deps/verifier.rs
 diff --git a/crates/tlsn/src/error.rs b/crates/tlsn/src/error.rs
 --- a/crates/tlsn/src/error.rs
 +++ b/crates/tlsn/src/error.rs
-@@ -162,3 +162,11 @@
+@@ -162,3 +162,11 @@ impl ErrorKind {
          matches!(self, ErrorKind::Config)
      }
  }
@@ -391,7 +533,7 @@ diff --git a/crates/tlsn/src/error.rs b/crates/tlsn/src/error.rs
 diff --git a/crates/tlsn/src/session.rs b/crates/tlsn/src/session.rs
 --- a/crates/tlsn/src/session.rs
 +++ b/crates/tlsn/src/session.rs
-@@ -9,7 +9,7 @@
+@@ -9,7 +9,7 @@ use std::{
  };
 
  use futures::{AsyncRead, AsyncWrite};
@@ -400,7 +542,7 @@ diff --git a/crates/tlsn/src/session.rs b/crates/tlsn/src/session.rs
  use tlsn_core::config::{prover::ProverConfig, verifier::VerifierConfig};
  use tlsn_mux::{Connection, Handle};
 
-@@ -37,7 +37,7 @@
+@@ -37,7 +37,7 @@ use crate::{
  #[must_use = "session must be polled continuously to make progress, including during closing."]
  pub struct Session<Io> {
      conn: Option<Connection<Io>>,
@@ -409,7 +551,7 @@ diff --git a/crates/tlsn/src/session.rs b/crates/tlsn/src/session.rs
      handle: Handle,
  }
 
-@@ -46,7 +46,7 @@
+@@ -46,7 +46,7 @@ where
      Io: AsyncRead + AsyncWrite + Unpin,
  {
      /// Creates a new session.
@@ -418,7 +560,7 @@ diff --git a/crates/tlsn/src/session.rs b/crates/tlsn/src/session.rs
          let mut mux_config = tlsn_mux::Config::default();
 
          mux_config.set_keep_alive(true);
-@@ -54,15 +54,15 @@
+@@ -54,15 +54,15 @@ where
 
          let conn = tlsn_mux::Connection::new(io, mux_config);
          let handle = conn.handle().expect("handle should be available");
@@ -426,10 +568,9 @@ diff --git a/crates/tlsn/src/session.rs b/crates/tlsn/src/session.rs
 +        let workers = build_workers(MuxHandle {
              handle: handle.clone(),
 -        });
--
--        Self {
 +        })?;
-+
+
+-        Self {
 +        Ok(Self {
              conn: Some(conn),
 -            executor,
@@ -440,7 +581,7 @@ diff --git a/crates/tlsn/src/session.rs b/crates/tlsn/src/session.rs
      }
 
      /// Creates a new prover.
-@@ -70,7 +70,7 @@
+@@ -70,7 +70,7 @@ where
          &mut self,
          config: ProverConfig,
      ) -> Result<Prover<prover_state::Initialized>> {
@@ -449,7 +590,7 @@ diff --git a/crates/tlsn/src/session.rs b/crates/tlsn/src/session.rs
              Error::internal()
                  .with_msg("failed to create new prover")
                  .with_source(e)
-@@ -84,7 +84,7 @@
+@@ -84,7 +84,7 @@ where
          &mut self,
          config: VerifierConfig,
      ) -> Result<Verifier<verifier_state::Initialized>> {
@@ -458,7 +599,7 @@ diff --git a/crates/tlsn/src/session.rs b/crates/tlsn/src/session.rs
              Error::internal()
                  .with_msg("failed to create new verifier")
                  .with_source(e)
-@@ -158,7 +158,7 @@
+@@ -158,7 +158,7 @@ where
                  waker: waker.clone(),
              },
              SessionHandle {
@@ -467,7 +608,7 @@ diff --git a/crates/tlsn/src/session.rs b/crates/tlsn/src/session.rs
                  should_close,
                  waker,
                  handle: self.handle,
-@@ -243,7 +243,7 @@
+@@ -243,7 +243,7 @@ where
  ///
  /// Used to create provers/verifiers and control the session lifecycle.
  pub struct SessionHandle {
@@ -476,7 +617,7 @@ diff --git a/crates/tlsn/src/session.rs b/crates/tlsn/src/session.rs
      should_close: Arc<AtomicBool>,
      waker: Arc<Mutex<Option<Waker>>>,
      handle: Handle,
-@@ -255,7 +255,7 @@
+@@ -255,7 +255,7 @@ impl SessionHandle {
          &mut self,
          config: ProverConfig,
      ) -> Result<Prover<prover_state::Initialized>> {
@@ -485,7 +626,7 @@ diff --git a/crates/tlsn/src/session.rs b/crates/tlsn/src/session.rs
              Error::internal()
                  .with_msg("failed to create new prover")
                  .with_source(e)
-@@ -269,7 +269,7 @@
+@@ -269,7 +269,7 @@ impl SessionHandle {
          &mut self,
          config: VerifierConfig,
      ) -> Result<Verifier<verifier_state::Initialized>> {
@@ -494,7 +635,7 @@ diff --git a/crates/tlsn/src/session.rs b/crates/tlsn/src/session.rs
              Error::internal()
                  .with_msg("failed to create new verifier")
                  .with_source(e)
-@@ -309,21 +309,33 @@
+@@ -309,21 +309,33 @@ impl Mux for MuxHandle {
      }
  }
 
@@ -529,15 +670,14 @@ diff --git a/crates/tlsn/src/session.rs b/crates/tlsn/src/session.rs
      });
 
 -    builder.build(mux)
--}
 +    let pool = builder.build()?;
 +    let session = mpz_common::Session::builder().pool(pool.clone()).build(mux)?;
 +    Ok(SessionWorkers { session, pool })
-+}
+ }
 diff --git a/crates/tlsn/src/transcript_internal/auth.rs b/crates/tlsn/src/transcript_internal/auth.rs
 --- a/crates/tlsn/src/transcript_internal/auth.rs
 +++ b/crates/tlsn/src/transcript_internal/auth.rs
-@@ -92,6 +92,11 @@
+@@ -92,6 +92,11 @@ pub(crate) fn verify_plaintext<'a>(
      reveal: &RangeSet<usize>,
      commit: &RangeSet<usize>,
  ) -> Result<(ReferenceMap, PlaintextProof<'a>), PlaintextAuthError> {
@@ -549,10 +689,46 @@ diff --git a/crates/tlsn/src/transcript_internal/auth.rs b/crates/tlsn/src/trans
      let is_reveal_all = reveal == (0..plaintext.len());
 
      let alloc_ranges = if is_reveal_all {
+diff --git a/crates/tlsn/src/transcript_internal/commit/hash.rs b/crates/tlsn/src/transcript_internal/commit/hash.rs
+--- a/crates/tlsn/src/transcript_internal/commit/hash.rs
++++ b/crates/tlsn/src/transcript_internal/commit/hash.rs
+@@ -3,6 +3,8 @@
+ use std::collections::HashMap;
+
+ use mpz_core::bitvec::BitVec;
++#[cfg(feature = "hash-poseidon2-koalabear")]
++use mpz_hash::poseidon2_koalabear::Poseidon2KoalaBear;
+ #[cfg(feature = "hash-blake3")]
+ use mpz_hash::blake3::Blake3;
+ #[cfg(feature = "hash-keccak256")]
+@@ -146,6 +148,23 @@ fn hash_commit_inner(
+         }
+
+         let hash = match alg {
++            #[cfg(feature = "hash-poseidon2-koalabear")]
++            HashAlgId::POSEIDON2_KOALABEAR_16_PAD10_V1 => {
++                let mut hasher = Poseidon2KoalaBear::default();
++                let refs = match direction {
++                    Direction::Sent => &refs.sent,
++                    Direction::Received => &refs.recv,
++                };
++                for range in idx.iter() {
++                    let input = refs.get(range).ok_or_else(HashCommitError::decode)?;
++                    hasher.update(&input);
++                }
++                hasher.update(&blinder);
++                match hasher.finalize(vm) {
++                    Ok(hash) => hash,
++                    Err(error) => return Err(HashCommitError::hasher(error)),
++                }
++            }
+             HashAlgId::SHA256 => {
+                 let mut hasher = if let Some(Hasher::Sha256(hasher)) = hashers.get(&alg).cloned() {
+                     hasher
 diff --git a/crates/tlsn/tests/test.rs b/crates/tlsn/tests/test.rs
 --- a/crates/tlsn/tests/test.rs
 +++ b/crates/tlsn/tests/test.rs
-@@ -43,8 +43,8 @@
+@@ -43,8 +43,8 @@ async fn test_mpc() {
          .unwrap();
 
      let (prover_socket, verifier_socket) = tokio::io::duplex(2 << 23);
@@ -563,7 +739,7 @@ diff --git a/crates/tlsn/tests/test.rs b/crates/tlsn/tests/test.rs
 
      let prover = session_p
          .new_prover(ProverConfig::builder().build().unwrap())
-@@ -110,8 +110,8 @@
+@@ -110,8 +110,8 @@ async fn test_proxy() {
          .unwrap();
 
      let (prover_socket, verifier_socket) = tokio::io::duplex(2 << 23);

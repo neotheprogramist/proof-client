@@ -8,6 +8,11 @@ from the consumer workspace. [patches.toml](patches.toml) selects the dependency
 
 Cryptographic patches:
 
+- `mpz/crates/circuits-core/`, `circuits-data/`, `circuits/` and `hash/`:
+  feature-gated KoalaBear Poseidon2 circuit, OUT_DIR loading and byte hashing.
+- `tlsn/crates/core/` and `tlsn/`: native `poseidon2-koalabear-16-pad10-v1`
+  byte hash, private ID 128, opening support and authenticated MPC dispatch.
+
 - `Plonky3/fri/src/hiding_pcs.rs`: release the hiding RNG lock before nested Rayon work.
 - `Plonky3/merkle-tree/src/hiding_mmcs.rs`: the same lock-scope correction for salts.
 - `Plonky3-recursion/recursion/src/types/proof.rs`: expose preprocessing commitment
@@ -45,5 +50,7 @@ by a zero byte and the SHA-256 of its contents. These revisions contain no symli
 Executable file paths are recorded separately and checked on Unix. The hashes detect
 local drift; the commit and upstream archive identify the source of authority.
 
-Regression gates are `hiding`, the recursive-verifier controls, `transport`, `attest`
-and CLI `tls`; `vendor` checks provenance. See [verification](../README.md#verification).
+The `attest` regression checks malicious commitments; recursive-verifier controls
+check emitted constraints. `poseidon2` compares native hashing and Boolean permutations
+with stock Plonky3. CLI `tls` checks both commitment suites through real MPC, and
+`vendor` checks provenance. See [verification](../README.md#verification).

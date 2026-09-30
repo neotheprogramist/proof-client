@@ -323,24 +323,12 @@ Few tests, well designed.
   interface only and assert **every** source of truth a state-changing operation touches — response,
   projection, persisted row, log line. Reaching into private state asserts a distinction behavior
   cannot observe.
-- **Model-based property testing is the natural form for a coalgebra.** Where a lifecycle has a
-  `step`, drive it with generated command sequences against a model (`proptest-state-machine`,
-  `fast-check` model commands) and assert the observations agree. Enumerate the invariants a spec
-  must witness before writing it; the spec is the executable form of that list.
-- **A suite that cannot fail is not a suite.** Mutation testing proves it. Run the full JavaScript
-  mutation scope on every change. Partition an expensive finite Rust scope by observable consumer;
-  run one deterministic rotating group and shard on every change, and retain the complete set as an
-  on-demand diagnostic. Hand-written negative controls run on every change.
-- **A witness never watched fail is not known to work.** The hand-written **negative control** is
-  the stricter complement to mutation testing: it drives one instance of each defect class the
-  structural witnesses claim to catch, so it checks that the WITNESSES work rather than that the
-  code does. Where a control table enumerates a witness's defect classes, its size is derived from
-  the witness rather than counted in a comment.
+- Prefer end-to-end workflows through public interfaces that also document library usage.
+  Leave simple code untested; remove duplicate helper tests and test-only abstractions.
+- Retain independent cryptographic conformance and adversarial proof checks: a round trip can
+  succeed when both peers share a bug.
+- Mutation testing is not required. Rejection cases belong in the workflows they protect.
 - Test code is exempt from A2's strict error handling; keep it direct.
-- Example-based tests are permitted only as regression captures, one named example per historical
-  bug. **A persisted generator seed is not one** — it is an opaque example the shrinker happened to
-  find. Fold the case into its generator as a named constant looped in full, so the shape runs on
-  every case rather than on the run that replays it, then discard the seed.
 
 ---
 
@@ -348,8 +336,7 @@ Few tests, well designed.
 
 `README.md` owns check commands, tool versions, test scopes and environment limitations.
 Run the checks relevant to the change and report only what ran.
-For behavior changes, run the documented mutation scope. Constructors, input boundaries,
-ownership, confidentiality and data evolution still require review.
+Constructors, input boundaries, ownership, confidentiality and data evolution still require review.
 
 ## Provenance
 

@@ -12,6 +12,7 @@ edition = "2024"
 workspace = true
 
 [features]
+hash-poseidon2-koalabear = ["dep:p3-field", "dep:p3-koala-bear", "dep:p3-symmetric"]
 default = []
 mozilla-certs = ["dep:webpki-root-certs", "dep:webpki-roots"]
 fixtures = [
@@ -23,6 +24,9 @@ fixtures = [
 ]
 
 [dependencies]
+p3-field = { workspace = true, optional = true }
+p3-koala-bear = { workspace = true, optional = true }
+p3-symmetric = { workspace = true, optional = true }
 tlsn-data-fixtures = { workspace = true, optional = true }
 tlsn-tls-core = { workspace = true, features = ["serde"] }
 

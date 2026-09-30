@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 
 use mpz_core::bitvec::BitVec;
+#[cfg(feature = "hash-poseidon2-koalabear")]
+use mpz_hash::poseidon2_koalabear::Poseidon2KoalaBear;
 #[cfg(feature = "hash-blake3")]
 use mpz_hash::blake3::Blake3;
 #[cfg(feature = "hash-keccak256")]
@@ -146,6 +148,23 @@ fn hash_commit_inner(
         }
 
         let hash = match alg {
+            #[cfg(feature = "hash-poseidon2-koalabear")]
+            HashAlgId::POSEIDON2_KOALABEAR_16_PAD10_V1 => {
+                let mut hasher = Poseidon2KoalaBear::default();
+                let refs = match direction {
+                    Direction::Sent => &refs.sent,
+                    Direction::Received => &refs.recv,
+                };
+                for range in idx.iter() {
+                    let input = refs.get(range).ok_or_else(HashCommitError::decode)?;
+                    hasher.update(&input);
+                }
+                hasher.update(&blinder);
+                match hasher.finalize(vm) {
+                    Ok(hash) => hash,
+                    Err(error) => return Err(HashCommitError::hasher(error)),
+                }
+            }
             HashAlgId::SHA256 => {
                 let mut hasher = if let Some(Hasher::Sha256(hasher)) = hashers.get(&alg).cloned() {
                     hasher

@@ -1,3 +1,4 @@
+use super::commitment::{CommitmentError, CommitmentHash, CommitmentPolicy};
 use crate::tls::disclosure::{self, Disclosure, DisclosureError};
 use futures::{AsyncRead, AsyncWrite, AsyncWriteExt, TryFutureExt};
 use http::{HeaderName, HeaderValue, Method};
@@ -13,7 +14,6 @@ use tlsn::{
     verifier::VerifierCommitStart,
 };
 use tlsn::{
-    hash::HashAlgId,
     rangeset::ops::Set,
     transcript::{
         Direction, Transcript, TranscriptCommitConfig, TranscriptCommitment,
@@ -30,6 +30,8 @@ pub const SESSION_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(thiserror::Error)]
 pub enum AttestError {
+    #[error(transparent)]
+    Commitment(#[from] CommitmentError),
     #[error("expected an HTTPS URL without credentials or a fragment")]
     Url,
     #[error("invalid URL syntax")]
@@ -58,6 +60,12 @@ pub enum AttestError {
     Io(#[from] std::io::Error),
     #[error("TLSN session failed")]
     Tlsn(#[from] tlsn::Error),
+    #[error("{reason}; session failed while rejecting: {source}")]
+    Rejection {
+        reason: Box<Self>,
+        #[source]
+        source: Box<Self>,
+    },
     #[error("invalid TLS configuration")]
     Tls(#[from] tlsn::config::tls::TlsConfigError),
     #[error("invalid MPC configuration")]
@@ -279,63 +287,6 @@ impl ProverOutput {
     }
 }
 
-// Policy: distinguish undisclosed bytes from authenticated hash commitments in text views.
-const HIDDEN_BYTE: &str = "🙈";
-const COMMITTED_BYTE: &str = "🔒";
-// Policy: use BLAKE3 for transcript commitments.
-const COMMITMENT_HASH: HashAlgId = HashAlgId::BLAKE3;
-
-#[derive(Clone, Copy)]
-enum DisplayByte {
-    Hidden,
-    Committed,
-    Disclosed(u8),
-}
-
-pub(super) fn redacted<'a>(
-    length: usize,
-    segments: &[Segment],
-    commitments: impl Iterator<Item = &'a PlaintextHash>,
-    limit: usize,
-) -> Result<Vec<u8>, AttestError> {
-    if length > limit {
-        return Err(AttestError::Transcript);
-    }
-    let mut bytes = vec![DisplayByte::Hidden; length];
-    for commitment in commitments {
-        for range in commitment.idx.iter() {
-            bytes
-                .get_mut(range)
-                .ok_or(AttestError::Transcript)?
-                .fill(DisplayByte::Committed);
-        }
-    }
-    for segment in segments {
-        let end = segment
-            .start
-            .checked_add(segment.bytes.len())
-            .ok_or(AttestError::Transcript)?;
-        let selected = bytes
-            .get_mut(segment.start..end)
-            .ok_or(AttestError::Transcript)?;
-        for (view, byte) in selected.iter_mut().zip(&segment.bytes) {
-            if !matches!(view, DisplayByte::Hidden) {
-                return Err(AttestError::Transcript);
-            }
-            *view = DisplayByte::Disclosed(*byte);
-        }
-    }
-    let mut output = Vec::new();
-    for byte in bytes {
-        match byte {
-            DisplayByte::Hidden => output.extend_from_slice(HIDDEN_BYTE.as_bytes()),
-            DisplayByte::Committed => output.extend_from_slice(COMMITTED_BYTE.as_bytes()),
-            DisplayByte::Disclosed(byte) => output.push(byte),
-        }
-    }
-    Ok(output)
-}
-
 fn hashes(commitments: Vec<TranscriptCommitment>) -> Result<Vec<PlaintextHash>, AttestError> {
     let mut hashes = commitments
         .into_iter()
@@ -359,10 +310,14 @@ fn hashes(commitments: Vec<TranscriptCommitment>) -> Result<Vec<PlaintextHash>, 
     Ok(hashes)
 }
 
-fn admit_commitments(request: &tlsn::config::prove::ProveRequest) -> Result<(), AttestError> {
+fn admit_commitments(
+    request: &tlsn::config::prove::ProveRequest,
+    policy: CommitmentPolicy,
+) -> Result<(), AttestError> {
     let (sent, received) = request.reveal().ok_or(AttestError::Missing)?;
     let mut sent_committed = tlsn::rangeset::set::RangeSet::default();
     let mut recv_committed = tlsn::rangeset::set::RangeSet::default();
+    let mut permutations = 0;
     for (index, (direction, ranges, algorithm)) in request
         .transcript_commit()
         .into_iter()
@@ -373,7 +328,7 @@ fn admit_commitments(request: &tlsn::config::prove::ProveRequest) -> Result<(), 
             Direction::Sent => (sent, &mut sent_committed, MAX_SENT),
             Direction::Received => (received, &mut recv_committed, MAX_RECEIVED),
         };
-        if *algorithm != COMMITMENT_HASH
+        if *algorithm != policy.hash().id()
             || index >= super::MAX_COMMITMENTS
             || ranges.is_empty()
             || ranges.end().ok_or(AttestError::Transcript)? > limit
@@ -383,6 +338,13 @@ fn admit_commitments(request: &tlsn::config::prove::ProveRequest) -> Result<(), 
             return Err(AttestError::Policy);
         }
         occupied.union_mut(ranges);
+        if let CommitmentPolicy::Poseidon2KoalaBear { max_permutations } = policy {
+            // PROOF: admitted ranges are bounded above; framing adds the 36-byte domain, 16-byte blinder and marker.
+            permutations += (ranges.len() + 36 + 16 + 1).div_ceil(3 * 8);
+            if permutations > max_permutations.get() {
+                return Err(CommitmentError::Budget.into());
+            }
+        }
     }
     Ok(())
 }
@@ -410,6 +372,7 @@ pub async fn attest_session<T, S>(
     verifier_socket: T,
     server_socket: S,
     roots: RootCertStore,
+    commitment_hash: CommitmentHash,
 ) -> Result<(T, ProverOutput), AttestError>
 where
     T: AsyncRead + AsyncWrite + Send + Unpin + 'static,
@@ -459,10 +422,10 @@ where
             &disclosure.reveal.sent,
             &disclosure.commit.sent,
         )?
-        .into_audit_parts();
+        .into_parts();
         let (received, commit_recv, received_selections) = response
             .resolve(&disclosure.reveal.received, &disclosure.commit.received)?
-            .into_audit_parts();
+            .into_parts();
         if commit_sent.len() + commit_recv.len() > super::MAX_COMMITMENTS {
             return Err(DisclosureError::CommitmentLimit.into());
         }
@@ -477,7 +440,7 @@ where
         );
         let mut commitments = TranscriptCommitConfig::builder(transcript);
         commitments.default_kind(TranscriptCommitmentKind::Hash {
-            alg: COMMITMENT_HASH,
+            alg: commitment_hash.id(),
         });
         for ranges in &commit_sent {
             commitments.commit_sent(ranges)?;
@@ -528,12 +491,15 @@ where
 pub async fn verify_session<T>(
     socket: T,
     roots: RootCertStore,
+    policy: CommitmentPolicy,
 ) -> Result<(T, VerifiedReport), AttestError>
 where
     T: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
     let session = Session::new(socket)?;
     let (driver, mut handle) = session.split();
+    // The session driver may fail while the rejection is being written.
+    let mut rejection = None;
     let operation = async {
         let verifier = handle
             .new_verifier(VerifierConfig::builder().root_store(roots).build()?)?
@@ -542,6 +508,7 @@ where
         let verifier = match verifier {
             VerifierCommitStart::Mpc(verifier) => verifier,
             VerifierCommitStart::Proxy(verifier) => {
+                rejection = Some(AttestError::Policy);
                 verifier.reject(Some("unsupported protocol")).await?;
                 return Err(AttestError::Policy);
             }
@@ -554,6 +521,7 @@ where
             || mpc.max_recv_records_online().is_some()
             || mpc.defer_decryption_from_start()
         {
+            rejection = Some(AttestError::Policy);
             verifier.reject(Some("unsupported budget")).await?;
             return Err(AttestError::Policy);
         }
@@ -561,7 +529,11 @@ where
         if !verifier.request().server_identity() {
             return Err(AttestError::Missing);
         }
-        admit_commitments(verifier.request())?;
+        if let Err(error) = admit_commitments(verifier.request(), policy) {
+            rejection = Some(error);
+            verifier.reject(Some("commitment policy rejected")).await?;
+            return Err(AttestError::Policy);
+        }
         let (output, verifier) = verifier.accept().await?;
         verifier.close().await?;
         handle.close();
@@ -581,5 +553,13 @@ where
             },
         }))
     };
-    futures::try_join!(driver.err_into::<AttestError>(), operation)
+    let result = futures::try_join!(driver.err_into::<AttestError>(), operation);
+    match (rejection, result) {
+        (Some(reason), Err(AttestError::Policy)) => Err(reason),
+        (Some(reason), Err(source)) => Err(AttestError::Rejection {
+            reason: Box::new(reason),
+            source: Box::new(source),
+        }),
+        (_, result) => result,
+    }
 }

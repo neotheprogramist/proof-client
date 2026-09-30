@@ -1,4 +1,5 @@
 pub mod attest;
+pub mod commitment;
 pub mod disclosure;
 pub mod quic;
 
