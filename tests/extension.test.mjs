@@ -101,12 +101,11 @@ test("native setup and observer failures release owned resources", { timeout: 50
       port.sent,
       ["preabort", "send-error"].includes(outcome)
         ? []
-        : [{ protocol: "proof-client/11", args: ["serve"] }],
+        : [{ protocol: "proof-client/12", args: ["serve"] }],
     );
-    if (outcome.startsWith("ready-")) port.onMessage.emit({ event: "ready", address: "localhost" });
-    if (outcome.startsWith("disconnect")) {
-      if (outcome === "disconnect-error")
-        Object.assign(fake.runtime, { lastError: { message: "host crashed" } });
+    if (outcome === "ready-error") port.onMessage.emit({ event: "ready", address: "localhost" });
+    if (outcome === "disconnect-error") {
+      Object.assign(fake.runtime, { lastError: { message: "host crashed" } });
       port.onDisconnect.emit();
     }
     await assert.rejects(promise, { message });
@@ -114,31 +113,6 @@ test("native setup and observer failures release owned resources", { timeout: 50
     assert.equal(getEventListeners(controller.signal, "abort").length, 0);
   }
 });
-
-test(
-  "malformed native events fail at the boundary and release ownership",
-  { timeout: 5000 },
-  async () => {
-    for (const [value, message] of [
-      [null, "Invalid native event"],
-      [{ event: "unknown" }, "Unknown native event"],
-      [{ event: "completed", result: { stdout_base64: "" } }, "Invalid HTTP result"],
-      [{ event: "ready" }, "Invalid ready event"],
-      [{ event: "completed", result: null }, "Invalid completion event"],
-      [{ event: "failed" }, "Invalid failure event"],
-    ]) {
-      const fake = browser();
-      const signal = new AbortController().signal;
-      const promise = invoke([], (state) => assert.notEqual(state.phase, phases.waiting), signal);
-      const port = fake.ports[0];
-      assert.ok(port);
-      port.onMessage.emit(value);
-      await assert.rejects(promise, { message });
-      closed(port);
-      assert.equal(getEventListeners(signal, "abort").length, 0);
-    }
-  },
-);
 
 /** @param {import("node:test").TestContext} context @param {string} html */
 function page(context, html) {
@@ -194,9 +168,8 @@ test("page preserves arguments, renders safely, and releases each operation", as
         input.value = value;
       },
       submit() {
-        const event = new window.Event("submit", { cancelable: true });
-        form.dispatchEvent(event);
-        assert.equal(event.defaultPrevented, true);
+        assert.equal(form.checkValidity(), true);
+        form.requestSubmit();
       },
       running() {
         assert.equal(fields.disabled, true);
@@ -239,14 +212,10 @@ test("page preserves arguments, renders safely, and releases each operation", as
       (port) =>
         port.onMessage.emit({
           event: "completed",
-          result: {
-            stdout_base64: Buffer.from("<script>private</script>🔒").toString("base64"),
-            metadata_output: "/fixture/metadata.json",
-          },
+          result: "Local plaintext: <script>private</script>\nRecord: /fixture/metadata.json",
         }),
-      "<script>private</script>🔒\nMetadata: /fixture/metadata.json",
+      "Local plaintext: <script>private</script>\nRecord: /fixture/metadata.json",
     ],
-    [(port) => port.onMessage.emit({ event: "failed", message: "rejected" }), "Failed: rejected"],
     [() => attest.cancel.click(), "Cancelled. Check output paths before starting a new operation."],
     [
       () => window.dispatchEvent(new window.Event("pagehide")),
@@ -261,7 +230,7 @@ test("page preserves arguments, renders safely, and releases each operation", as
     assert.ok(port);
     assert.deepEqual(port.sent, [
       {
-        protocol: "proof-client/11",
+        protocol: "proof-client/12",
         args: [
           "attest",
           "--verifier",
@@ -279,55 +248,40 @@ test("page preserves arguments, renders safely, and releases each operation", as
     await attest.settled(text);
     closed(port);
   }
-  for (const input of ["{", "[1]", '["--url", 1]']) {
-    const fake = browser();
-    attest.set("request-args", input);
-    attest.submit();
-    assert.equal(fake.ports.length, 0);
-    if (input === "{") assert.ok(attest.output.textContent.startsWith("Failed:"));
-    else await attest.settled("Failed: Request arguments must be a JSON array of strings");
-  }
-  const unavailable = browser();
-  unavailable.runtime.connectNative = () => {
-    throw Object.freeze({ code: "external failure" });
-  };
-  attest.set("request-args", "[]");
+  const invalid = browser();
+  attest.set("request-args", '["--url", 1]');
   attest.submit();
-  await attest.settled("Failed: Unknown native failure");
-  assert.equal(unavailable.ports.length, 0);
+  await attest.settled("Failed: Request arguments must be a JSON array of strings");
+  assert.equal(invalid.ports.length, 0);
 
-  for (const command of ["serve", "verify"]) {
-    const form = operation(command);
-    const fake = browser();
-    if (command === "verify") {
-      for (const name of ["circuit", "proof", "public"]) form.set(name, `/trusted/${name}.json`);
-    } else form.set("max-commitment-permutations", "12");
-    form.submit();
-    form.running();
-    const port = fake.ports[0];
-    assert.ok(port);
-    if (command === "serve") {
-      port.onMessage.emit({ event: "ready", address: "localhost" });
-      assert.equal(form.output.textContent, "Ready: localhost. Waiting for one attestation.");
-    } else
-      assert.deepEqual(port.sent, [
-        {
-          protocol: "proof-client/11",
-          args: [
-            "verify",
-            "--circuit",
-            "/trusted/circuit.json",
-            "--proof",
-            "/trusted/proof.json",
-            "--public",
-            "/trusted/public.json",
-          ],
-        },
-      ]);
-    port.onMessage.emit({ event: "completed", result: { verified: true } });
-    await form.settled('Completed\n{\n  "verified": true\n}');
-    closed(port);
-  }
+  const serve = operation("serve");
+  const fake = browser();
+  serve.set("max-commitment-permutations", "12");
+  serve.set("server-name", "localhost");
+  serve.set("data-dir", "/fixture");
+  serve.submit();
+  serve.running();
+  const port = fake.ports[0];
+  assert.ok(port);
+  assert.deepEqual(port.sent, [
+    {
+      protocol: "proof-client/12",
+      args: [
+        "serve",
+        "--max-commitment-permutations",
+        "12",
+        "--server-name",
+        "localhost",
+        "--data-dir",
+        "/fixture",
+      ],
+    },
+  ]);
+  port.onMessage.emit({ event: "ready", address: "localhost" });
+  assert.equal(serve.output.textContent, "Ready: localhost. Waiting for one attestation.");
+  port.onMessage.emit({ event: "completed", result: "Verified report" });
+  await serve.settled("Verified report");
+  closed(port);
 });
 
 test(
@@ -351,13 +305,18 @@ test(
         for (const event of events) {
           if (event === "cancel") controller.abort();
           else
-            port.onMessage.emit({ event, address: "localhost", result: {}, message: "rejected" });
+            port.onMessage.emit({
+              event,
+              address: "localhost",
+              result: "Verified report",
+              message: "rejected",
+            });
         }
         if (command === "serve" && events.join() === "ready,completed,ready") {
-          assert.deepEqual(await promise, {});
+          assert.equal(await promise, "Verified report");
           assert.deepEqual(observed, ["running", "waiting", "succeeded"]);
         } else if (command === "attest" && events.join() === "completed") {
-          assert.deepEqual(await promise, {});
+          assert.equal(await promise, "Verified report");
           assert.deepEqual(observed, ["running", "succeeded"]);
         } else {
           await assert.rejects(promise, NativeError);

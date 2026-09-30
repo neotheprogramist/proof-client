@@ -84,11 +84,8 @@ async fn prepare_prove_verify_and_native_verify() {
     ];
     let output = support::output(support::command().args(args)).await;
     assert!(output.status.success());
-    assert!(
-        String::from_utf8(output.stdout)
-            .unwrap()
-            .contains("Public words: [49]")
-    );
+    let report = String::from_utf8(output.stdout).unwrap();
+    assert!(report.contains("Public words: [49]"));
 
     let mut host = support::command()
         .arg("chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/")
@@ -112,8 +109,7 @@ async fn prepare_prove_verify_and_native_verify() {
     let event: Value =
         serde_json::from_slice(&proof_client::stdio::read_frame(&mut frames).unwrap()).unwrap();
     assert_eq!(event["event"], "completed");
-    assert_eq!(event["result"]["public"], artifact["public"]);
-    assert_eq!(event["result"]["circuit_id"], artifact["circuit_id"]);
+    assert_eq!(event["result"], report);
     assert_eq!(frames.position() as usize, output.stdout.len());
 
     let output = support::output(

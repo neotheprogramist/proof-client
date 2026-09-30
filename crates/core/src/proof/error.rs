@@ -8,6 +8,21 @@ pub enum Error {
     Statement,
     #[error("invalid or unsupported circuit, witness, or proof shape")]
     Shape,
+    #[error("invalid operation at index {0}")]
+    Operation(usize),
+    #[error("invalid constraint at index {0}")]
+    Constraint(usize),
+    #[error("{input} count: expected {expected}, got {actual}")]
+    InputCount {
+        input: &'static str,
+        expected: usize,
+        actual: usize,
+    },
+    #[error("invalid source {path:?}: {source}")]
+    Source {
+        path: std::path::PathBuf,
+        source: Box<Error>,
+    },
     #[error("invalid JSON input")]
     Json(#[from] serde_json::Error),
     #[error("cannot construct the proof configuration: {0}")]

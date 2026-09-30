@@ -103,11 +103,14 @@ impl Session {
         let prepared = self.prepared.get(circuit).ok_or(Error::Shape)?;
         let assignment =
             Assignment::parse(public, witness, prepared.inputs, prepared.wiring.len())?;
-        self.prove_assignment(circuit, assignment)
+        self.prove_assignment(prepared, assignment)
     }
     #[tracing::instrument(name = "prove", skip_all)]
-    fn prove_assignment(&self, circuit: &Path, assignment: Assignment) -> Result<Artifact, Error> {
-        let prepared = self.prepared.get(circuit).ok_or(Error::Shape)?;
+    fn prove_assignment(
+        &self,
+        prepared: &Prepared,
+        assignment: Assignment,
+    ) -> Result<Artifact, Error> {
         prepared.check_statement(&assignment.public)?;
         prove_prepared(prepared, assignment, |wiring, proof| match &wiring.target {
             ChildTarget::Circuit(circuit) => {
@@ -176,7 +179,10 @@ pub fn prove(
         definition.verifications().count(),
     )?;
     with_session(circuit, threads, |session| {
-        session.prove_assignment(&session.entry, assignment)
+        session.prove_assignment(
+            session.prepared.get(&session.entry).ok_or(Error::Shape)?,
+            assignment,
+        )
     })
 }
 pub fn verify(

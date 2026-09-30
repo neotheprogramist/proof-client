@@ -1,6 +1,5 @@
 use crate::files::{FileError, Output, read};
 use crate::{identity::IdentityError, stdio};
-use base64::{Engine, engine::general_purpose::STANDARD};
 use clap::builder::{PossibleValuesParser, TypedValueParser};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use proof_client_core::{
@@ -9,6 +8,7 @@ use proof_client_core::{
         attest,
         commitment::{CommitmentHash, CommitmentPolicy},
         disclosure::Disclosure,
+        evidence::MAX_RECORD_BYTES,
         quic,
     },
 };
@@ -276,30 +276,6 @@ impl Execution {
             }
         }
     }
-    fn native(self) -> Result<Value, CliError> {
-        let (bytes, metadata_output) = match self {
-            Self::Served {
-                receipt,
-                metadata_output,
-            } => {
-                let transcript = receipt.evidence().redacted()?;
-                let mut bytes = b"--- Sent ---\n".to_vec();
-                bytes.extend_from_slice(transcript.sent());
-                bytes.extend_from_slice(b"\n--- Received ---\n");
-                bytes.extend_from_slice(transcript.received());
-                (bytes, metadata_output)
-            }
-            Self::Attested {
-                artifact,
-                metadata_output,
-            } => (artifact.into_response(), metadata_output),
-            other @ (Self::Prepared { .. }
-            | Self::Proved { .. }
-            | Self::Verified { .. }
-            | Self::Inspected { .. }) => return Ok(other.json()),
-        };
-        Ok(json!({"stdout_base64":STANDARD.encode(bytes),"metadata_output":metadata_output}))
-    }
 }
 #[derive(thiserror::Error)]
 pub enum CliError {
@@ -325,6 +301,8 @@ pub enum CliError {
     Disclosure(#[from] proof_client_core::tls::disclosure::DisclosureError),
     #[error("invalid JSON or result encoding")]
     Json(#[from] serde_json::Error),
+    #[error("invalid report encoding")]
+    ReportEncoding(#[from] std::string::FromUtf8Error),
     #[error("local I/O failed: {0}")]
     Io(#[from] io::Error),
     #[error(transparent)]
@@ -386,18 +364,20 @@ fn pem(path: Option<&Path>) -> Result<Option<Vec<u8>>, FileError> {
         .transpose()
 }
 
-pub fn invoke(
+pub(crate) fn invoke(
     args: Vec<String>,
     ready: impl FnMut(SocketAddr) -> Result<(), CliError>,
 ) -> Result<Value, CliError> {
     let invocation =
         Invocation::try_parse_from(std::iter::once("proof-client".to_owned()).chain(args))?;
-    execute(
+    let result = execute(
         invocation.command.admit_native(&invocation.storage)?,
         &invocation.storage,
         ready,
-    )?
-    .native()
+    )?;
+    let mut report = Vec::new();
+    crate::report::human(&mut report, &result)?;
+    Ok(json!(String::from_utf8(report)?))
 }
 
 pub fn execute(
@@ -407,10 +387,8 @@ pub fn execute(
 ) -> Result<Execution, CliError> {
     match command {
         Command::Inspect { path } => {
-            let record = proof_client_core::tls::evidence::Record::parse(&read(
-                &path,
-                prover::MAX_INPUT_BYTES,
-            )?)?;
+            let record =
+                proof_client_core::tls::evidence::Record::parse(&read(&path, MAX_RECORD_BYTES)?)?;
             Ok(Execution::Inspected { record, path })
         }
         Command::Prepare {
@@ -422,7 +400,7 @@ pub fn execute(
             let out = Output::prepare(&output)?;
             let metadata = prover::prepare(crate::files::circuit(&circuit)?, workers(threads)?)?;
             let output = out.path().to_owned();
-            out.publish(&metadata)?;
+            out.publish(&metadata, prover::MAX_INPUT_BYTES)?;
             Ok(Execution::Prepared { output, metadata })
         }
         Command::Prove {
@@ -449,7 +427,7 @@ pub fn execute(
                 workers(threads)?,
             )?;
             let output = out.path().to_owned();
-            out.publish(&proof)?;
+            out.publish(&proof, prover::MAX_PROOF_BYTES)?;
             Ok(Execution::Proved {
                 output,
                 circuit_id: proof.circuit_id(),
@@ -509,7 +487,7 @@ pub fn execute(
                 ready(verifier.local_addr()?)?;
                 Ok::<_, CliError>(verifier.verify().await?)
             })?;
-            metadata.publish(&receipt.evidence())?;
+            metadata.publish(&receipt.evidence(), MAX_RECORD_BYTES)?;
             Ok(Execution::Served {
                 receipt,
                 metadata_output,
@@ -551,6 +529,6 @@ fn attest(args: Attest, storage: &Storage) -> Result<(quic::Attestation, String)
         args.commitment_hash,
     ))?;
     tracing::info!(phase = "publishing_private_record", output = ?metadata_output);
-    metadata.publish(&artifact.metadata())?;
+    metadata.publish(&artifact.metadata(), MAX_RECORD_BYTES)?;
     Ok((artifact, metadata_output))
 }

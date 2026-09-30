@@ -17,7 +17,7 @@ pub(crate) fn read(path: &Path, limit: usize) -> Result<Vec<u8>, FileError> {
 }
 #[derive(Debug, thiserror::Error)]
 pub enum FileError {
-    #[error("input exceeds its admission limit")]
+    #[error("artifact exceeds its size limit")]
     Limit,
     #[error("output path must not already exist")]
     Output,
@@ -123,13 +123,17 @@ impl Output {
             directory: Directory::Existing(parent),
         })
     }
-    pub(crate) fn publish(self, value: &impl serde::Serialize) -> Result<(), FileError> {
+    pub(crate) fn publish(
+        self,
+        value: &impl serde::Serialize,
+        limit: usize,
+    ) -> Result<(), FileError> {
         let mut file = io_at(
             "prepare artifact",
             self.directory.path(),
             tempfile::NamedTempFile::new_in(self.directory.path()),
         )?;
-        if let Err(source) = serde_json::to_writer_pretty(file.as_file_mut(), value) {
+        if let Err(source) = serde_json::to_writer(file.as_file_mut(), value) {
             return Err(FileError::Json {
                 path: self.path,
                 source,
@@ -140,6 +144,16 @@ impl Output {
             Path::new(&self.path),
             file.write_all(b"\n"),
         )?;
+        if io_at(
+            "inspect artifact size",
+            Path::new(&self.path),
+            file.as_file().metadata(),
+        )?
+        .len()
+            > limit as u64
+        {
+            return Err(FileError::Limit);
+        }
         io_at(
             "sync artifact",
             Path::new(&self.path),
@@ -175,7 +189,17 @@ pub(crate) fn circuit(
         let bytes = read(&path, MAX_INPUT_BYTES - size)?;
         size += bytes.len();
         let parent = path.parent().ok_or(FileError::Output)?;
-        let source = Source::parse(&bytes)?.resolve(|reference| {
+        let source = match Source::parse(&bytes) {
+            Ok(source) => source,
+            Err(source) => {
+                return Err(proof_client_core::proof::Error::Source {
+                    path: path.clone(),
+                    source: Box::new(source),
+                }
+                .into());
+            }
+        }
+        .resolve(|reference| {
             let dependency = parent.join(reference);
             let dependency = io_at(
                 "resolve circuit dependency",

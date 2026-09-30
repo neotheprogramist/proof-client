@@ -10,6 +10,8 @@ struct JsonParser;
 // Policy: bound HTTP metadata and parser recursion before allocating the JSON syntax tree.
 const MAX_HEADERS: usize = 128;
 const MAX_JSON_DEPTH: usize = 64;
+// Policy: each direction gets a quarter of the record budget; evidence retains the other half.
+const MAX_SELECTION_BYTES: usize = super::evidence::MAX_RECORD_BYTES / 4;
 
 #[derive(thiserror::Error)]
 pub enum DisclosureError {
@@ -43,6 +45,8 @@ pub enum DisclosureError {
     Selector,
     #[error("transcript commitment count exceeds the session budget")]
     CommitmentLimit,
+    #[error("resolved disclosure audit exceeds the record budget")]
+    AuditLimit,
     #[error("JSON nesting exceeds the parser limit")]
     Depth,
     #[error("invalid disclosure configuration")]
@@ -76,11 +80,13 @@ enum WireSelection {
     JsonKey(Pointer),
     JsonValue(Pointer),
 }
+#[derive(Clone, PartialEq, Eq, Hash)]
 enum JsonPart {
     Member,
     Key,
     Value,
 }
+#[derive(Clone, PartialEq, Eq, Hash)]
 enum Selection {
     Bytes(Range<usize>),
     StartLine,
@@ -94,6 +100,7 @@ pub struct MessageDisclosure(Vec<Selection>);
 impl TryFrom<Vec<WireSelection>> for MessageDisclosure {
     type Error = DisclosureError;
     fn try_from(input: Vec<WireSelection>) -> Result<Self, Self::Error> {
+        let mut seen = HashSet::new();
         input
             .into_iter()
             .map(|selection| {
@@ -114,12 +121,16 @@ impl TryFrom<Vec<WireSelection>> for MessageDisclosure {
                     WireSelection::JsonValue(pointer) => Selection::Json(pointer, JsonPart::Value),
                 })
             })
+            .filter(|selection| match selection {
+                Ok(selection) => seen.insert(selection.clone()),
+                Err(_) => true,
+            })
             .collect::<Result<Vec<_>, _>>()
             .map(Self)
     }
 }
 
-#[derive(Deserialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, PartialEq, Eq, Hash)]
 #[serde(try_from = "String")]
 struct Pointer(Vec<String>);
 impl TryFrom<String> for Pointer {
@@ -853,7 +864,8 @@ fn resolve_selections(
     } else {
         json_fields(&message.ok_or(DisclosureError::Http)?.body, &pointers)?
     };
-    let select = |config: &MessageDisclosure| -> Result<_, DisclosureError> {
+    let mut remaining = MAX_SELECTION_BYTES;
+    let mut select = |config: &MessageDisclosure| -> Result<_, DisclosureError> {
         let mut selections = Vec::new();
         for selection in &config.0 {
             let mut ranges = Vec::new();
@@ -899,10 +911,15 @@ fn resolve_selections(
                     }
                 }
             }
-            selections.push(SelectionResolution {
+            let resolved = SelectionResolution {
                 selector: selection.description(),
                 ranges,
-            });
+            };
+            let size = serde_json::to_vec(&resolved)?.len() + 1;
+            remaining = remaining
+                .checked_sub(size)
+                .ok_or(DisclosureError::AuditLimit)?;
+            selections.push(resolved);
         }
         Ok(selections)
     };

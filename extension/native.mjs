@@ -1,9 +1,9 @@
 // @ts-check
 const host = "io.github.neotheprogramist.proof_client";
-const protocol = "proof-client/11";
+const protocol = "proof-client/12";
 const tags = Object.freeze({ ready: "ready", completed: "completed", failed: "failed" });
 /** @typedef {{event: "ready", address: string}} Ready */
-/** @typedef {{event: "completed", result: object, text: string}} Completed */
+/** @typedef {{event: "completed", result: string}} Completed */
 /** @typedef {{event: "failed", message: string}} Failed */
 /** @typedef {Ready | Completed | Failed} Event */
 export class NativeError extends Error {
@@ -30,13 +30,12 @@ function parse(value) {
       }
       return Object.freeze({ event: tags.ready, address: value.address });
     case tags.completed:
-      if (!("result" in value) || typeof value.result !== "object" || value.result === null) {
+      if (!("result" in value) || typeof value.result !== "string") {
         throw new NativeError("Invalid completion event");
       }
       return Object.freeze({
         event: tags.completed,
         result: value.result,
-        text: resultText(value.result),
       });
     case tags.failed:
       if (!("message" in value) || typeof value.message !== "string") {
@@ -46,21 +45,6 @@ function parse(value) {
     default:
       throw new NativeError("Unknown native event");
   }
-}
-/** @param {object} result */
-function resultText(result) {
-  if ("stdout_base64" in result) {
-    if (
-      typeof result.stdout_base64 !== "string" ||
-      !("metadata_output" in result) ||
-      typeof result.metadata_output !== "string"
-    ) {
-      throw new NativeError("Invalid HTTP result");
-    }
-    const bytes = Uint8Array.from(atob(result.stdout_base64), (byte) => byte.charCodeAt(0));
-    return `${new TextDecoder().decode(bytes)}\nMetadata: ${result.metadata_output}`;
-  }
-  return `Completed\n${JSON.stringify(result, null, 2)}`;
 }
 export const phases = Object.freeze({
   idle: "idle",
@@ -73,7 +57,7 @@ export const phases = Object.freeze({
 /** @typedef {{phase: "idle"}} Idle */
 /** @typedef {{phase: "running", command: string | undefined}} Running */
 /** @typedef {{phase: "waiting", address: string}} Waiting */
-/** @typedef {{phase: "succeeded", result: object, text: string}} Succeeded */
+/** @typedef {{phase: "succeeded", result: string}} Succeeded */
 /** @typedef {{phase: "failed", error: Error}} Failure */
 /** @typedef {{phase: "cancelled"}} Cancelled */
 /** @typedef {Idle | Running | Waiting | Succeeded | Failure | Cancelled} State */
@@ -107,7 +91,6 @@ function step(state, event) {
       return Object.freeze({
         phase: phases.succeeded,
         result: event.result,
-        text: event.text,
       });
     case tags.failed:
       return Object.freeze({ phase: phases.failed, error: new NativeError(event.message) });

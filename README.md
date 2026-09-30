@@ -1,6 +1,6 @@
 # Proof Client
 
-The CLI is the primary interface for running, auditing and reproducing project workflows. Commands show their purpose, observed stages, verification scope and output artifacts. Rust libraries own parsing and cryptography; Chrome is an optional adapter to the same operations.
+The CLI is the primary interface: each step is explicit for audit, review and reproduction. Commands expose stages, verification scope and artifacts. Rust owns parsing and cryptography; Chrome shares final reports. Use the CLI for intermediate observations.
 
 | Command   | Purpose                                                 | Result                                               |
 | --------- | ------------------------------------------------------- | ---------------------------------------------------- |
@@ -11,15 +11,13 @@ The CLI is the primary interface for running, auditing and reproducing project w
 | `attest`  | Send a new HTTPS request and apply a disclosure policy  | Matching verifier receipt and private opening record |
 | `inspect` | Read a saved TLS record                                 | Untrusted recorded evidence; no live verification    |
 
-Circuit proofs and TLS disclosure are independent workflows. A circuit proof does not establish TLS provenance; authenticated transcript bytes do not establish hidden JSON relationships.
-
 `crates/core/` owns proof and TLS validation; `crates/cli/` owns arguments, files and terminal/native I/O. `extension/` is plain JavaScript with JSDoc. Examples live in `examples/`; [vendor/README.md](vendor/README.md) records dependency patches and provenance.
 
 ## Setup
 
 CLI prerequisites: Git, rustup and a native C toolchain. Extension development and JavaScript checks also require Node.js 26+ with npm. Rust is pinned in `rust-toolchain.toml`; JavaScript tools are locked in `package-lock.json`.
 
-Run zsh/bash examples from the repository root. Cargo builds each command as needed. Proof runs use fresh directories; TLS runs reuse local identities. There is no browser build step or CI.
+Run zsh/bash examples from the repository root. Proof runs use fresh directories; TLS runs reuse identities. There is no browser build step or CI.
 
 Agents may install repository dependencies and development tools. Install Cargo tools with a repository-local `--root` under `target/`; do not install globally or change persistent PATH settings. The owner performs Chrome registration, commits and pushes manually.
 
@@ -36,7 +34,7 @@ Human-readable reports are the default. Stderr records observed stages; stdout c
 - `attest --format raw` emits the exact private response body. It adds no newline; zsh may display `%` after an unterminated line. Other commands reject raw output before I/O.
 - Reports show byte ranges as `[start, end)`, escaping control and non-ASCII bytes. Live `attest` reports print every transcript byte, including cookies and committed values; disclosure labels describe what the verifier receives. `serve` and `inspect` print plaintext only for revealed ranges. Displayed text is not reconstructed JSON.
 
-Progress reports input paths and trust configuration, workers, prepared circuit/set IDs, framed response lengths, selector-to-wire ranges, required/admitted commitment work, verification, receipt matching and publication. These observations appear as each stage completes, including before later failures. Selector labels are local interpretations, not authenticated ancestry. Stderr never includes witness or request values; selector names and source paths are visible. Library callers install their own tracing subscriber.
+Progress reports input paths, trust configuration, workers, prepared IDs, response lengths, selector ranges, commitment work, verification, receipt matching and publication as they occur. Stderr omits witness and request values; selector names and source paths are visible. Library callers install their own tracing subscriber.
 
 Inspect the exact metadata path printed by `serve` or `attest`, including custom `--metadata-output` files:
 
@@ -45,7 +43,7 @@ record='.data/runs/REPLACE_WITH_REPORTED_RUN_NAME/metadata.json'
 cargo run --release --locked --bin proof-client -- inspect "$record"
 ```
 
-TLS records retain disclosed bytes and offsets, lengths and commitments. Prover records also retain private openings and normalized selector-to-range mappings; inspection omits openings. Inspection checks range bounds and mapping consistency; it does not re-evaluate selector meanings. Older records without mappings or disclosed segments remain readable. Records are mutable local evidence, not portable attestations; inspection never repeats TLS verification.
+TLS records retain disclosed bytes, offsets, lengths and commitments. Prover records add private openings and selector mappings. Inspection omits openings and checks bounds and mapping consistency, not selector meanings or TLS authenticity. Older records without mappings or segments remain readable.
 
 For reproduction, retain trusted circuit sources, expected public inputs and required private inputs explicitly. `--locked` uses the checked-in dependency lock. Fresh proofs and blinded commitments need not have identical bytes. Attestation sends a new request; the remote response may change. Full requests, hidden transcripts and response bodies are not saved automatically.
 
@@ -61,9 +59,11 @@ Host must match the URL and Content-Length must match the body; suppressing eith
 
 Use `serve --help` and `attest --help` for flags and defaults. `serve --server-name` is the independently expected HTTPS target; it is distinct from the local verifier's TLS name. Missing identities fail; commands never create or trust certificates implicitly.
 
-Metadata uses `<data-dir>/runs/{attest,serve}.<random>/metadata.json`, or `--metadata-output`. Publication reports the exact path and never overwrites an existing destination. Prover records contain private openings. Runtime artifacts belong under `.data/`; builds use `target/`.
+Metadata uses `<data-dir>/runs/{attest,serve}.<random>/metadata.json`, or `--metadata-output`. Artifacts use compact JSON and are never overwritten. Runtime artifacts belong under `.data/`; builds use `target/`.
 
-Omitting `--disclosure` hides all transcript bytes and creates no explicit commitments. A supplied [policy](examples/mbank/disclosure.json) has symmetric `reveal` and `commit` objects, each containing `sent` and `received` selections. Omitted objects/directions and empty arrays select nothing; `{}` hides everything. Unknown fields, missing selectors and overlapping reveal/commit ranges fail. Revealed ranges form a union. Each distinct committed selection produces one independently openable blinded commitment (Poseidon2–KoalaBear by default). Identical selections share a commitment; empty or partially overlapping committed selections fail. All wire ranges of one selection, including across HTTP chunks, share its digest and blinder. The per-session count limit is `MAX_COMMITMENTS` in `crates/core/src/tls/mod.rs`.
+Omitting `--disclosure` hides all transcript bytes and creates no explicit commitments. A [policy](examples/mbank/disclosure.json) has `reveal` and `commit` objects with `sent` and `received` arrays. Omitted or empty arrays select nothing. Unknown fields, missing selectors and overlapping reveal/commit ranges fail. Revealed ranges form a union. Each distinct committed selection produces one independently openable blinded commitment (Poseidon2–KoalaBear by default). Parsing deduplicates selectors. Identical committed ranges share a commitment; empty or partially overlapping commitments fail. All wire ranges of one selection, including across HTTP chunks, share its digest and blinder. The per-session count limit is `MAX_COMMITMENTS` in `crates/core/src/tls/mod.rs`.
+
+Publication and inspection share `MAX_RECORD_BYTES` in `crates/core/src/tls/evidence.rs`. Resolution bounds each direction’s audit to one quarter of that budget before commitment work; publication checks the complete serialized record before making it visible. Excess evidence fails explicitly; it is never truncated.
 
 Live commitment numbers follow transcript order, sent before received. Match openings to commitments by direction and ranges, not array position. The prover's selector report uses the same mapping; these local labels do not authenticate JSON ancestry. Earlier saved records retain their original grouping.
 
@@ -79,7 +79,7 @@ Live commitment numbers follow transcript order, sent before received. Match ope
 
 Selectors use JSON Pointer escaping (`~0` for `~`, `~1` for `/`). Original bytes, including decimal spelling and string escapes, are preserved across HTTP chunks. Duplicate decoded keys fail. There are no wildcard queries, implicit structural disclosures or policy-file discovery.
 
-TLSN authenticates selected bytes and positions, not hidden JSON ancestry, account ownership, freshness or completeness. Application statements require authenticated context or a separate proof. Only live verification or a matched receipt constructs `VerifiedReport`; saved records carry no verification authority. Native messaging displays hidden/committed bytes as 🙈/🔒.
+TLSN authenticates selected bytes and positions, not hidden JSON ancestry, account ownership, freshness or completeness. Application statements require authenticated context or a separate proof. Only live verification or a matched receipt constructs `VerifiedReport`; saved records carry no verification authority.
 
 Receipt validation, QUIC closure, metadata publication and stdout delivery are separate transitions. Metadata is saved before stdout; a save or broken pipe failure can follow successful remote verification. Published files remain. There are no automatic retries.
 
@@ -99,7 +99,7 @@ Circuit `poseidon2` uses a separate encoding and cannot directly verify TLS open
 
 ### Local fixture
 
-Open three terminals at the repository root. Repeat the same commands for another attestation; existing identities are reused and metadata goes into new runs.
+Open three terminals at the repository root. Repeated runs reuse identities and save new metadata.
 
 Terminal 1: create the verifier identity, then start the HTTPS fixture:
 
@@ -109,14 +109,14 @@ cargo run --release --locked --example certificates
 cargo run --release --locked --example fixture
 ```
 
-The verifier identity lives in `.data/identity/`; the fixture has a separate target identity in `.data/fixture/`. Neither is installed in a system trust store. Examples lock initialization, validate existing pairs and create only absent pairs; partial pairs fail without repair. Unix private keys are owner-only. Use `--directory` for isolated runs and wait for the fixture's `ready` event.
+Identities live in `.data/identity/` (verifier) and `.data/fixture/` (target); neither enters a system trust store. Initialization is locked, reuses valid pairs and rejects partial pairs. Unix keys are owner-only. Use `--directory` for isolation; wait for `ready`.
 
-Terminal 2: choose a positive work budget using the formula above, then start Serve:
+Terminal 2: start Serve with the fixture’s budget of four permutations (its quoted account value is 31 bytes):
 
 ```sh
 cargo run --release --locked --bin proof-client -- serve \
   --target-ca .data/fixture/target.pem --server-name localhost \
-  --max-commitment-permutations "${COMMITMENT_BUDGET:?Set a positive permutation budget}"
+  --max-commitment-permutations 4
 ```
 
 Check Serve's expected target and wait for its `ready` event on stderr. Terminal 3: run Attest. The cookie is a synthetic placeholder, not a fixture credential; the fixture does not authenticate clients. The checked-in policy hides cookies, reveals balance/currency and the account key, and commits the account value.
@@ -160,9 +160,9 @@ cargo run --release --locked --bin proof-client -- verify --circuit examples/mer
 )
 ```
 
-Check prepared IDs/input counts, proof self-verification and the published path, then compare verified public words with `public.json`. `prepare` is optional inspection; every command prepares trusted sources independently.
+Check prepared IDs/counts, proof self-verification and publication, then compare verified words with `public.json`. `prepare` is optional; each command prepares trusted sources independently.
 
-Public input is a JSON array. The private witness contains `private` field words and a `proofs` array. Verification requires the independently expected public input; a proof cannot choose the verifier's claim. `prepare` derives circuit and verifier-set IDs from the supplied definitions. Metadata assists input construction; it is not verification authority.
+Public input is a JSON array; the witness contains `private` words and `proofs`. Verification requires independently expected public input. Prepared metadata assists input construction; it supplies no verification authority.
 
 `proof-client/circuit/4` declares `inputs: {"public":1,"private":1}`, `operations` and `constraints`. Registers number public fields, private scalar fields, then operation outputs. Proof slots are a separate indexed collection; their count is derived from `verify` operations, with slots `0..count` each verified exactly once.
 
@@ -199,8 +199,6 @@ Set verification constrains actual-key membership and propagates the set ID from
 
 The [recursive session workflow](crates/core/tests/recursion.rs) builds all eight leaves and three merge levels while reusing preparation. To construct parent inputs through the CLI, use `cargo run --release --locked --example merkle -- parent --help`: it consumes two child proofs and prepared metadata, emitting either public input or a witness. Prove height 1 with `merge-bases.json`, later heights with `merge-recursive.json`. Generate the final expected statement independently with the example's `public --height 3 --metadata <file>` command, then run `verify` against the recursive circuit.
 
-Metadata is derived once and read thereafter; it is not verification authority. Final verification needs the final proof, trusted sources and expected public input. IDs do not depend on filenames. Library sessions reuse preparation; CLI invocations prepare independently.
-
 ## Chrome
 
 Run `npm ci` for extension development and checks. Load `extension/` in Chrome 124+ through `chrome://extensions` → Developer mode → Load unpacked. Record its ID. Obtain the binary's absolute path from the `compiler-artifact` message's `executable` field:
@@ -233,9 +231,7 @@ Click the toolbar action. All native file paths must be absolute; terminal paths
 
 Check Cancel and tab close while Serve waits: its port becomes reusable and no metadata is published. Forced process termination can leave an empty run directory. After success, published files remain. Each operation owns one native port/process; tab close disconnects them. Only `nativeMessaging` permission is required.
 
-Each port sends one invocation, `{"protocol":"proof-client/11","args":[...]}`, using CLI arguments. Frames are UTF-8 JSON with a native-endian four-byte length, bounded by `MAX_FRAME_BYTES` in `crates/cli/src/stdio.rs`. Serve emits Ready, then every invocation emits Completed or Failed and exits. Terminal commands default to human reports; `--format json` selects JSON events and `attest --format raw` selects response bytes. Ready and progress use stderr; errors use stderr and failure status. Native TLS results contain `stdout_base64` and the metadata path. Arguments never pass through a shell.
-
-Installed Chrome cancellation and live-target acceptance require manual verification.
+Each port sends one invocation, `{"protocol":"proof-client/12","args":[...]}`, using CLI arguments. Frames are UTF-8 JSON with a native-endian four-byte length, bounded by `MAX_FRAME_BYTES` in `crates/cli/src/stdio.rs`. Serve emits Ready, then every invocation emits Completed or Failed and exits. Completed carries the CLI human report as its `result` string. The page inserts it as text; Attest includes all local plaintext. Intermediate progress remains on native stderr and is visible when running the CLI. Oversized native reports fail at the frame limit; published artifacts remain. Arguments never pass through a shell.
 
 ## Verification
 

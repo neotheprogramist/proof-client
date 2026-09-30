@@ -73,7 +73,7 @@ pub fn write_frame(
     Ok(())
 }
 
-pub const PROTOCOL: &str = "proof-client/11";
+pub const PROTOCOL: &str = "proof-client/12";
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -106,5 +106,13 @@ pub fn run(reader: &mut impl Read, writer: &mut impl Write) -> Result<(), FrameE
             message: error.to_string(),
         },
     };
-    write_frame(writer, &event)
+    match write_frame(writer, &event) {
+        Err(error @ (FrameError::Length | FrameError::Encode(_))) => write_frame(
+            writer,
+            &Event::Failed {
+                message: error.to_string(),
+            },
+        ),
+        result => result,
+    }
 }

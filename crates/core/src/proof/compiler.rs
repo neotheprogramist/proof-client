@@ -39,7 +39,7 @@ pub(super) fn validate_body(
     }
     let mut hash_words = 0usize;
     let mut proof_slots = vec![false; definition.verifications().count()];
-    for operation in &definition.operations {
+    for (index, operation) in definition.operations.iter().enumerate() {
         let added = match operation {
             Operation::Constant { value } if *value < F::ORDER_U32 => 1,
             Operation::Add { left, right }
@@ -60,29 +60,31 @@ pub(super) fn validate_body(
                 hash_words = hash_words
                     .checked_add(inputs.len())
                     .filter(|n| *n <= MAX_WIRES)
-                    .ok_or(Error::Shape)?;
+                    .ok_or(Error::Operation(index))?;
                 8
             }
             Operation::Verify(call) => {
-                let slot = proof_slots.get_mut(call.proof).ok_or(Error::Shape)?;
+                let slot = proof_slots
+                    .get_mut(call.proof)
+                    .ok_or(Error::Operation(index))?;
                 if *slot || call.circuit_id_wires.iter().any(|index| *index >= wires) {
-                    return Err(Error::Shape);
+                    return Err(Error::Operation(index));
                 }
                 *slot = true;
                 child_count(call)?
             }
-            _ => return Err(Error::Shape),
+            _ => return Err(Error::Operation(index)),
         };
         wires = wires
             .checked_add(added)
             .filter(|n| *n <= MAX_WIRES)
-            .ok_or(Error::Shape)?;
+            .ok_or(Error::Operation(index))?;
     }
-    for constraint in &definition.constraints {
+    for (index, constraint) in definition.constraints.iter().enumerate() {
         match constraint {
             Constraint::Equal { left, right } if *left < wires && *right < wires => {}
             Constraint::Bits { wire, bits } if *wire < wires && (1..=30).contains(bits) => {}
-            _ => return Err(Error::Shape),
+            _ => return Err(Error::Constraint(index)),
         }
     }
     Ok(())
@@ -123,11 +125,20 @@ impl Assignment {
             return Err(Error::Shape);
         }
         let witness: Witness = serde_json::from_slice(bytes)?;
-        if public.0.len() != inputs.public
-            || witness.private.len() != inputs.private
-            || witness.proofs.len() != proof_count
-            || witness.private.iter().any(|word| *word >= F::ORDER_U32)
-        {
+        for (input, expected, actual) in [
+            ("public words", inputs.public, public.0.len()),
+            ("private words", inputs.private, witness.private.len()),
+            ("child proofs", proof_count, witness.proofs.len()),
+        ] {
+            if actual != expected {
+                return Err(Error::InputCount {
+                    input,
+                    expected,
+                    actual,
+                });
+            }
+        }
+        if witness.private.iter().any(|word| *word >= F::ORDER_U32) {
             return Err(Error::Shape);
         }
         Ok(Self {

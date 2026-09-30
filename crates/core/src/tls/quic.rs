@@ -165,7 +165,7 @@ pub struct Attestation {
 }
 
 #[derive(Serialize)]
-pub struct PrivateMetadata<'a> {
+struct PrivateMetadata<'a> {
     #[serde(flatten)]
     metadata: &'a super::evidence::Evidence,
     openings: &'a [Opening],
@@ -179,10 +179,7 @@ impl Attestation {
     pub fn response(&self) -> &[u8] {
         &self.session.response
     }
-    pub fn into_response(self) -> Vec<u8> {
-        self.session.response
-    }
-    pub fn metadata(&self) -> PrivateMetadata<'_> {
+    pub fn metadata(&self) -> impl Serialize + '_ {
         PrivateMetadata {
             metadata: self.receipt.evidence(),
             openings: &self.session.openings,

@@ -12,7 +12,8 @@
       <h1>Proof Client</h1>
       <p>
         Local circuits and live HTTPS disclosure. Enter absolute file paths on the native host.
-        Output files must not exist.
+        Output files must not exist. Final reports match the CLI; use the CLI for intermediate audit
+        logs.
       </p>
       <section>
         <h2>Prove / verify</h2>
@@ -58,8 +59,8 @@
         <h2>Serve / attest</h2>
         <p>
           Start Serve, wait for Ready, then run Attest using its address. The verifier receives
-          selected bytes and transcript lengths; Attest displays the private response and saves
-          private commitment openings in metadata.
+          selected bytes and transcript lengths; Attest displays all local transcript bytes and
+          saves private commitment openings in metadata.
         </p>
         <div class="forms">
           <form id="serve">

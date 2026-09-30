@@ -41,7 +41,7 @@ for (const form of document.querySelectorAll("form")) {
         output.textContent = `Ready: ${state.address}. Waiting for one attestation.`;
         break;
       case phases.succeeded:
-        output.textContent = state.text;
+        output.textContent = state.result;
         break;
       case phases.failed:
         output.textContent = `Failed: ${state.error.message}`;

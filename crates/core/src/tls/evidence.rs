@@ -1,6 +1,9 @@
 use super::attest::{AttestError, MAX_RECEIVED, MAX_SENT, Segment};
 use serde::{Deserialize, Serialize};
-use tlsn::transcript::{Direction, Transcript, hash::PlaintextHash};
+use tlsn::transcript::{Direction, hash::PlaintextHash};
+
+// Policy: publication and inspection share one TLS record size limit.
+pub const MAX_RECORD_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Evidence {
@@ -21,30 +24,6 @@ impl Evidence {
     }
     pub fn commitments(&self) -> &[PlaintextHash] {
         &self.commitments
-    }
-    pub fn redacted(&self) -> Result<Transcript, AttestError> {
-        let [sent, received] = self.display_bytes()?;
-        Ok(Transcript::new(render(sent), render(received)))
-    }
-    fn display_bytes(&self) -> Result<[Vec<DisplayByte>; 2], AttestError> {
-        Ok([
-            display_bytes(
-                self.sent_len,
-                &self.sent,
-                self.commitments
-                    .iter()
-                    .filter(|c| c.direction == Direction::Sent),
-                MAX_SENT,
-            )?,
-            display_bytes(
-                self.received_len,
-                &self.received,
-                self.commitments
-                    .iter()
-                    .filter(|c| c.direction == Direction::Received),
-                MAX_RECEIVED,
-            )?,
-        ])
     }
     pub fn sent(&self) -> impl Iterator<Item = (usize, &[u8])> {
         self.sent.iter().map(|s| (s.start, s.bytes.as_slice()))
@@ -75,6 +54,8 @@ pub struct Record {
 }
 #[derive(Debug, thiserror::Error)]
 pub enum RecordError {
+    #[error("TLS record exceeds its size limit")]
+    Limit,
     #[error("saved selector ranges are invalid or disagree with recorded evidence")]
     Selections,
     #[error("invalid saved TLS record")]
@@ -84,6 +65,9 @@ pub enum RecordError {
 }
 impl Record {
     pub fn parse(bytes: &[u8]) -> Result<Self, RecordError> {
+        if bytes.len() > MAX_RECORD_BYTES {
+            return Err(RecordError::Limit);
+        }
         #[derive(Deserialize)]
         struct Wire {
             server_name: String,
@@ -108,7 +92,25 @@ impl Record {
             sent,
             received,
         };
-        evidence.display_bytes()?;
+        for (direction, length, segments, limit) in [
+            (Direction::Sent, evidence.sent_len, &evidence.sent, MAX_SENT),
+            (
+                Direction::Received,
+                evidence.received_len,
+                &evidence.received,
+                MAX_RECEIVED,
+            ),
+        ] {
+            validate_ranges(
+                length,
+                segments,
+                evidence
+                    .commitments
+                    .iter()
+                    .filter(|c| c.direction == direction),
+                limit,
+            )?;
+        }
         if let Some(selections) = &wire.selections {
             selections.validate(&evidence, complete)?;
         }
@@ -129,66 +131,34 @@ impl Record {
     }
 }
 
-// Policy: distinguish undisclosed bytes from authenticated hash commitments in text views.
-const HIDDEN_BYTE: &str = "🙈";
-const COMMITTED_BYTE: &str = "🔒";
-
-#[derive(Clone, Copy)]
-enum DisplayByte {
-    Hidden,
-    Committed,
-    Disclosed(u8),
-}
-
-fn display_bytes<'a>(
+fn validate_ranges<'a>(
     length: usize,
     segments: &[Segment],
     commitments: impl Iterator<Item = &'a PlaintextHash>,
     limit: usize,
-) -> Result<Vec<DisplayByte>, AttestError> {
+) -> Result<(), AttestError> {
     if length > limit {
         return Err(AttestError::Transcript);
     }
-    let mut bytes = vec![DisplayByte::Hidden; length];
-    for commitment in commitments {
-        for range in commitment.idx.iter() {
-            for byte in bytes.get_mut(range).ok_or(AttestError::Transcript)? {
-                if !matches!(byte, DisplayByte::Hidden) {
-                    return Err(AttestError::Transcript);
-                }
-                *byte = DisplayByte::Committed;
-            }
-        }
-    }
-    for segment in segments {
-        if segment.bytes.is_empty() {
-            return Err(AttestError::Transcript);
-        }
-        let end = segment
+    let mut bytes = vec![false; length];
+    let disclosed = segments.iter().map(|segment| {
+        segment
             .start
             .checked_add(segment.bytes.len())
-            .ok_or(AttestError::Transcript)?;
-        let selected = bytes
-            .get_mut(segment.start..end)
-            .ok_or(AttestError::Transcript)?;
-        for (view, byte) in selected.iter_mut().zip(&segment.bytes) {
-            if !matches!(view, DisplayByte::Hidden) {
-                return Err(AttestError::Transcript);
-            }
-            *view = DisplayByte::Disclosed(*byte);
+            .filter(|end| *end > segment.start)
+            .map(|end| segment.start..end)
+            .ok_or(AttestError::Transcript)
+    });
+    for range in commitments
+        .flat_map(|c| c.idx.iter())
+        .map(Ok)
+        .chain(disclosed)
+    {
+        let occupied = bytes.get_mut(range?).ok_or(AttestError::Transcript)?;
+        if occupied.contains(&true) {
+            return Err(AttestError::Transcript);
         }
+        occupied.fill(true);
     }
-    Ok(bytes)
-}
-
-fn render(bytes: Vec<DisplayByte>) -> Vec<u8> {
-    let mut output = Vec::new();
-    for byte in bytes {
-        match byte {
-            DisplayByte::Hidden => output.extend_from_slice(HIDDEN_BYTE.as_bytes()),
-            DisplayByte::Committed => output.extend_from_slice(COMMITTED_BYTE.as_bytes()),
-            DisplayByte::Disclosed(byte) => output.push(byte),
-        }
-    }
-    output
+    Ok(())
 }

@@ -18,7 +18,6 @@ indexing_slicing = "deny"
 mpz-circuits-core = { git = "https://github.com/tlsnotary/mpz2", rev = "eaca5f9d9f30167c9525716e8f0aa9e33d886e5e", features = ["poseidon2-koalabear"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
-base64 = "0.23.1"
 futures-rustls = { version = "0.26.0", default-features = false, features = ["ring", "tls12"] }
 proof-client-core = { path = "crates/core" }
 clap = { version = "4.6.7", features = ["derive"] }

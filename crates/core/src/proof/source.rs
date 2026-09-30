@@ -132,56 +132,65 @@ impl Circuit {
         };
         circuit.definition(&circuit.entry)?;
         for (path, source) in &circuit.sources {
-            match source {
-                Source::Circuit(definition) => {
-                    if let Some(verifier_set) = &definition.verifier_set
-                        && !circuit.verifier_set(verifier_set)?.circuits.contains(path)
-                    {
-                        return Err(Error::Shape);
-                    }
-                    super::compiler::validate_body(definition, |call| {
-                        match circuit.sources.get(&call.verifier) {
-                            Some(Source::Circuit(child)) => Ok(child.inputs.public),
-                            Some(Source::VerifierSet(set)) => {
-                                if path != &set.circuits[1] {
-                                    return Err(Error::Shape);
-                                }
-                                Ok(circuit.definition(&set.circuits[0])?.inputs.public)
-                            }
-                            None => Err(Error::Shape),
+            let result = (|| {
+                match source {
+                    Source::Circuit(definition) => {
+                        if let Some(verifier_set) = &definition.verifier_set
+                            && !circuit.verifier_set(verifier_set)?.circuits.contains(path)
+                        {
+                            return Err(Error::Shape);
                         }
-                    })?;
-                }
-                Source::VerifierSet(set) => {
-                    set.layout.validate()?;
-                    if set.circuits[0] == set.circuits[1] {
-                        return Err(Error::Shape);
+                        super::compiler::validate_body(definition, |call| {
+                            match circuit.sources.get(&call.verifier) {
+                                Some(Source::Circuit(child)) => Ok(child.inputs.public),
+                                Some(Source::VerifierSet(set)) => {
+                                    if path != &set.circuits[1] {
+                                        return Err(Error::Shape);
+                                    }
+                                    Ok(circuit.definition(&set.circuits[0])?.inputs.public)
+                                }
+                                None => Err(Error::Shape),
+                            }
+                        })?;
                     }
-                    let count = circuit.definition(&set.circuits[0])?.inputs.public;
-                    let positions = set
-                        .verifier_set_id_positions
-                        .iter()
-                        .copied()
-                        .collect::<BTreeSet<_>>();
-                    if positions.len() != 8 || positions.iter().any(|index| *index >= count) {
-                        return Err(Error::Shape);
-                    }
-                    for member in &set.circuits {
-                        let source = circuit.definition(member)?;
-                        if source.inputs.public != count
-                            || source.verifier_set.as_ref() != Some(path)
+                    Source::VerifierSet(set) => {
+                        set.layout.validate()?;
+                        if set.circuits[0] == set.circuits[1] {
+                            return Err(Error::Shape);
+                        }
+                        let count = circuit.definition(&set.circuits[0])?.inputs.public;
+                        let positions = set
+                            .verifier_set_id_positions
+                            .iter()
+                            .copied()
+                            .collect::<BTreeSet<_>>();
+                        if positions.len() != 8 || positions.iter().any(|index| *index >= count) {
+                            return Err(Error::Shape);
+                        }
+                        for member in &set.circuits {
+                            let source = circuit.definition(member)?;
+                            if source.inputs.public != count
+                                || source.verifier_set.as_ref() != Some(path)
+                            {
+                                return Err(Error::Shape);
+                            }
+                        }
+                        if !circuit
+                            .definition(&set.circuits[1])?
+                            .verifications()
+                            .any(|call| &call.verifier == path)
                         {
                             return Err(Error::Shape);
                         }
                     }
-                    if !circuit
-                        .definition(&set.circuits[1])?
-                        .verifications()
-                        .any(|call| &call.verifier == path)
-                    {
-                        return Err(Error::Shape);
-                    }
                 }
+                Ok(())
+            })();
+            if let Err(source) = result {
+                return Err(Error::Source {
+                    path: path.clone(),
+                    source: Box::new(source),
+                });
             }
         }
         let mut order = Vec::new();
