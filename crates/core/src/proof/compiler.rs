@@ -2,7 +2,7 @@ use super::{
     Error,
     config::Config,
     engine::{self, Backend, E, F, Inputs},
-    identity::{CircuitId, key},
+    identity::{CircuitId, DESCRIPTOR, KEY, VERIFIER_SET, key},
     shape,
     source::{
         Constraint, Definition, InputsCount, MAX_INPUT_BYTES, MAX_RECURSIVE_CALLS, MAX_WIRES,
@@ -51,6 +51,7 @@ pub(super) fn validate_body(
             }
             Operation::Poseidon2 { tag, inputs }
                 if *tag < F::ORDER_U32
+                    && ![KEY, VERIFIER_SET, DESCRIPTOR].contains(tag)
                     && !inputs.is_empty()
                     && inputs.len().is_multiple_of(8)
                     && inputs.len() <= MAX_WIRES

@@ -63,7 +63,7 @@ Use `serve --help` and `attest --help` for flags and defaults. `serve --server-n
 
 Metadata uses `<data-dir>/runs/{attest,serve}.<random>/metadata.json`, or `--metadata-output`. Publication reports the exact path and never overwrites an existing destination. Prover records contain private openings. Runtime artifacts belong under `.data/`; builds use `target/`.
 
-Omitting `--disclosure` hides all transcript bytes and creates no explicit commitments. A supplied [policy](examples/mbank/disclosure.json) has symmetric `reveal` and `commit` objects, each containing `sent` and `received` selections. Omitted objects/directions and empty arrays select nothing; `{}` hides everything. Unknown fields, missing selectors and overlapping reveal/commit ranges fail. Revealed ranges form a union. Each distinct committed selection produces one independently openable blinded commitment (BLAKE3 by default). Identical selections share a commitment; empty or partially overlapping committed selections fail. All wire ranges of one selection, including across HTTP chunks, share its digest and blinder. The per-session count limit is `MAX_COMMITMENTS` in `crates/core/src/tls/mod.rs`.
+Omitting `--disclosure` hides all transcript bytes and creates no explicit commitments. A supplied [policy](examples/mbank/disclosure.json) has symmetric `reveal` and `commit` objects, each containing `sent` and `received` selections. Omitted objects/directions and empty arrays select nothing; `{}` hides everything. Unknown fields, missing selectors and overlapping reveal/commit ranges fail. Revealed ranges form a union. Each distinct committed selection produces one independently openable blinded commitment (Poseidon2–KoalaBear by default). Identical selections share a commitment; empty or partially overlapping committed selections fail. All wire ranges of one selection, including across HTTP chunks, share its digest and blinder. The per-session count limit is `MAX_COMMITMENTS` in `crates/core/src/tls/mod.rs`.
 
 Live commitment numbers follow transcript order, sent before received. Match openings to commitments by direction and ranges, not array position. The prover's selector report uses the same mapping; these local labels do not authenticate JSON ancestry. Earlier saved records retain their original grouping.
 
@@ -87,7 +87,7 @@ Idle listeners wait for a client. `SESSION_TIMEOUT` in `crates/core/src/tls/atte
 
 ### KoalaBear commitments
 
-BLAKE3 remains the default. To select the experimental Plonky3 suite, add `--commitment-hash poseidon2-koalabear-16-pad10-v1` to both `serve` and `attest`. Serve also requires `--max-commitment-permutations N`, where `N` is a positive operator-selected budget. Mismatched algorithms and excess work are rejected before either peer schedules commitment hashes; no algorithm is substituted.
+The default is `poseidon2-koalabear-16-pad10-v1`. Serve requires `--max-commitment-permutations N`, a positive operator-selected budget, even when no commitments are requested. A missing budget fails before I/O. For BLAKE3, add `--commitment-hash blake3` to both peers and omit the budget. Mismatched suites and excess work fail before commitment hashing; no suite is substituted. Protocol and dependency-integrity hashes remain unchanged.
 
 For selections of lengths `n_i`, the required budget is `sum(ceil((n_i + 53) / 24))`. Count each distinct commitment separately and add its discontiguous range lengths. For example, separate 34- and 90-byte selections need ten permutations. This bounds work, not peak memory; see the [measurements](#verification) before choosing a budget.
 
@@ -111,11 +111,12 @@ cargo run --release --locked --example fixture
 
 The verifier identity lives in `.data/identity/`; the fixture has a separate target identity in `.data/fixture/`. Neither is installed in a system trust store. Examples lock initialization, validate existing pairs and create only absent pairs; partial pairs fail without repair. Unix private keys are owner-only. Use `--directory` for isolated runs and wait for the fixture's `ready` event.
 
-Terminal 2: start Serve:
+Terminal 2: choose a positive work budget using the formula above, then start Serve:
 
 ```sh
 cargo run --release --locked --bin proof-client -- serve \
-  --target-ca .data/fixture/target.pem --server-name localhost
+  --target-ca .data/fixture/target.pem --server-name localhost \
+  --max-commitment-permutations "${COMMITMENT_BUDGET:?Set a positive permutation budget}"
 ```
 
 Check Serve's expected target and wait for its `ready` event on stderr. Terminal 3: run Attest. The cookie is a synthetic placeholder, not a fixture credential; the fixture does not authenticate clients. The checked-in policy hides cookies, reveals balance/currency and the account key, and commits the account value.
@@ -137,7 +138,7 @@ Check the disclosed balance/currency bytes, range totals and matching commitment
 
 In DevTools → Network, choose **Copy → Copy as cURL (bash)**. Attest sends a new request; it cannot attest a captured response.
 
-Create the local verifier identity with the `certificates` example. Copy [the disclosure policy](examples/mbank/disclosure.json) to `.data/bank-disclosure.json` and edit its selectors for your response. Start `serve --server-name '<target hostname>'` and wait for `ready`.
+Create the local verifier identity with the `certificates` example. Copy [the disclosure policy](examples/mbank/disclosure.json) to `.data/bank-disclosure.json` and edit its selectors for your response. Start `serve --server-name '<target hostname>' --max-commitment-permutations <budget>` with your positive work budget and wait for `ready`.
 
 Replace the leading `curl` with `cargo run --release --locked --bin proof-client -- attest --disclosure .data/bank-disclosure.json`. Preserve supported URL, method, header, cookie and body arguments, including shell quoting. Replace any `Connection: keep-alive` with `Connection: close`. Unsupported curl options fail; remove `--compressed` and request identity encoding. Do not use the fixture's target CA for a real target.
 
@@ -178,7 +179,9 @@ Public input is a JSON array. The private witness contains `private` field words
 
 Circuit IDs contain eight canonical KoalaBear words and commit to the prepared verification contract: protocol profile, AIR constraints, lookups, statement layout, table dimensions and preprocessing commitments. They are not hashes of JSON formatting or names. Artifacts carry `circuit_id`, `public` and `proof`. The verifier independently prepares trusted definitions.
 
-Words are canonical KoalaBear elements; arithmetic is modular. Admission limits live in `crates/core/src/proof/{source,compiler}.rs`; the hiding profile lives in `crates/core/src/proof/config.rs`. Regenerate metadata and proofs when circuit IDs change. Output files are never overwritten. The proving profile is experimental and unaudited; no composed soundness or zero-knowledge guarantee is claimed. Circuit verification alone does not establish TLSN provenance.
+Circuit `poseidon2` tags exclude the internal key, verifier-set and descriptor domains declared in `crates/core/src/proof/identity.rs`. Descriptor hashing uses Poseidon2 `Pad10Sponge`: an eight-word domain block, then three-byte little-endian packing of the serialized descriptor plus byte `01`, zero-filling the last triple. Circuit IDs hash this eight-word digest with preprocessing roots.
+
+Words are canonical KoalaBear elements; arithmetic is modular. Admission limits live in `crates/core/src/proof/{source,compiler}.rs`; the hiding profile lives in `crates/core/src/proof/config.rs`. The backend profile in `identity.rs` versions ID derivation. Regenerate derived metadata and proofs from retained inputs when IDs change; preserve archived artifacts, using a pinned old build for historical verification. Output files are never overwritten. The proving profile is experimental and unaudited; no composed soundness or zero-knowledge guarantee is claimed. Circuit verification alone does not establish TLSN provenance.
 
 ## Merkle example
 
@@ -226,7 +229,7 @@ Register this native-host manifest:
 
 Chrome does not expand `~` or environment variables. Escape Windows backslashes. See [native messaging registration](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging) for custom profiles.
 
-Click the toolbar action. All native file paths must be absolute; terminal paths may be relative. Verify the base example using `examples/merkle/base.json` and the `public.json` and `proof.json` files in its printed output directory, converted to absolute paths. To prove again, use that directory’s `witness.json` and a new proof output path. For TLS, follow the local fixture identity/setup commands, start the fixture in a terminal, then start Serve in the form using the absolute data directory and explicit target-CA path, wait for Ready, then enter its curl-style request arguments as one JSON array, for example `["--url", "https://localhost:7443/balance", "-b", "session=SYNTHETIC_PLACEHOLDER", "--data-raw", "{}"]`. Empty strings are preserved. The array is appended after the connection and data-directory arguments and parsed by the CLI.
+Click the toolbar action. All native file paths must be absolute; terminal paths may be relative. Verify the base example using `examples/merkle/base.json` and the `public.json` and `proof.json` files in its printed output directory, converted to absolute paths. To prove again, use that directory’s `witness.json` and a new proof output path. For TLS, follow the local fixture identity/setup commands, start the fixture in a terminal, then start Serve in the form using the absolute data directory and explicit target-CA path and positive permutation budget, wait for Ready, then enter its curl-style request arguments as one JSON array, for example `["--url", "https://localhost:7443/balance", "-b", "session=SYNTHETIC_PLACEHOLDER", "--data-raw", "{}"]`. Select the same commitment suite on both forms; BLAKE3 disables the budget. Empty strings are preserved. The array is appended after the connection and data-directory arguments and parsed by the CLI.
 
 Check Cancel and tab close while Serve waits: its port becomes reusable and no metadata is published. Forced process termination can leave an empty run directory. After success, published files remain. Each operation owns one native port/process; tab close disconnects them. Only `nativeMessaging` permission is required.
 

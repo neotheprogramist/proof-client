@@ -65,6 +65,20 @@
           <form id="serve">
             <fieldset>
               <legend>Serve</legend>
+              <label for="serve-commitment-hash">Commitment suite (same on both peers)</label>
+              <select id="serve-commitment-hash" name="commitment-hash">
+                <option value="">CLI default (Poseidon2–KoalaBear)</option>
+                <option value="blake3">BLAKE3</option>
+              </select>
+              <label for="serve-budget">Permutation budget per session (KoalaBear)</label>
+              <input
+                id="serve-budget"
+                name="max-commitment-permutations"
+                type="number"
+                min="1"
+                step="1"
+                required
+              />
               <label for="serve-listen">Listen address, e.g. 127.0.0.1:7047</label
               ><input id="serve-listen" name="listen" type="text" />
               <label for="serve-cert">Verifier certificate path</label
@@ -85,6 +99,11 @@
           <form id="attest">
             <fieldset>
               <legend>Attest</legend>
+              <label for="attest-commitment-hash">Commitment suite (same on both peers)</label>
+              <select id="attest-commitment-hash" name="commitment-hash">
+                <option value="">CLI default (Poseidon2–KoalaBear)</option>
+                <option value="blake3">BLAKE3</option>
+              </select>
               <label for="attest-request-args">Request arguments as a JSON array</label>
               <textarea id="attest-request-args" name="request-args" required>
 ["--url", "https://localhost:7443/balance", "--data-raw", "{}"]</textarea>

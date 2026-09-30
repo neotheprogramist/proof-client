@@ -50,13 +50,10 @@ async fn attest_disclose_open_and_inspect() {
             .arg(dir.path().join("target.pem"))
             .arg("--metadata-output")
             .arg(&public_path);
-        if hash != "blake3" {
-            serve.args([
-                "--commitment-hash",
-                hash,
-                "--max-commitment-permutations",
-                "12",
-            ]);
+        if hash == "blake3" {
+            serve.args(["--commitment-hash", hash]);
+        } else {
+            serve.args(["--max-commitment-permutations", "12"]);
         }
         let mut verifier = serve.spawn().unwrap();
         let mut stderr = BufReader::new(verifier.stderr.take().unwrap());
@@ -97,7 +94,7 @@ async fn attest_disclose_open_and_inspect() {
                 "--data-raw",
                 "{}",
             ]);
-        if hash != "blake3" {
+        if hash == "blake3" {
             attest.args(["--commitment-hash", hash]);
         }
         let client = attest.spawn().unwrap();

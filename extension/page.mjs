@@ -11,6 +11,21 @@ for (const form of document.querySelectorAll("form")) {
   ) {
     throw new NativeError("Operation form is incomplete");
   }
+  if (form.id === "serve") {
+    const suite = form.elements.namedItem("commitment-hash");
+    const budget = form.elements.namedItem("max-commitment-permutations");
+    if (
+      !(suite instanceof window.HTMLSelectElement) ||
+      !(budget instanceof window.HTMLInputElement)
+    )
+      throw new NativeError("Commitment controls are incomplete");
+    const updateBudget = () => {
+      budget.disabled = suite.value === "blake3";
+      budget.required = !budget.disabled;
+    };
+    suite.addEventListener("change", updateBudget);
+    updateBudget();
+  }
   /** @param {import("./native.mjs").State} state */
   const render = (state) => {
     fields.disabled = active(state);

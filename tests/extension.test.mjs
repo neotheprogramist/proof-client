@@ -301,7 +301,7 @@ test("page preserves arguments, renders safely, and releases each operation", as
     const fake = browser();
     if (command === "verify") {
       for (const name of ["circuit", "proof", "public"]) form.set(name, `/trusted/${name}.json`);
-    }
+    } else form.set("max-commitment-permutations", "12");
     form.submit();
     form.running();
     const port = fake.ports[0];

@@ -11,6 +11,7 @@
     margin: 0;
   }
   input,
+  select,
   textarea,
   button {
     font: inherit;
@@ -25,6 +26,7 @@
     font-weight: bold;
   }
   input,
+  select,
   textarea {
     min-inline-size: 0;
   }

@@ -124,7 +124,7 @@ pub enum Command {
         /// Admit only this commitment hash; peers must select the same suite.
         #[arg(long, default_value_t = CommitmentHash::default(), value_parser = commitment_hash_parser())]
         commitment_hash: CommitmentHash,
-        /// Required for KoalaBear: total permutation budget per session.
+        /// Required for the default KoalaBear suite; total permutation budget per session.
         #[arg(long)]
         max_commitment_permutations: Option<NonZeroUsize>,
         /// Local QUIC listener; accepts one attestation.

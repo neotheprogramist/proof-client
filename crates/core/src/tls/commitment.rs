@@ -3,8 +3,8 @@ use tlsn::hash::HashAlgId;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CommitmentHash {
-    #[default]
     Blake3,
+    #[default]
     Poseidon2KoalaBear,
 }
 

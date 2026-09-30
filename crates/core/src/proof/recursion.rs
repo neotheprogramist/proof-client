@@ -3,7 +3,7 @@ use super::{
     compiler::{self, Child, ChildTarget, Prepared, base_words, build, equal, statement_targets},
     config::Config,
     engine::{self, E, Inputs},
-    identity::{KEY, VERIFIER_SET, descriptor, descriptor_words},
+    identity::{KEY, VERIFIER_SET, descriptor, descriptor_digest},
     shape,
     source::{Circuit, Source, Verification, VerifierSet},
 };
@@ -134,7 +134,7 @@ fn allocate(
     positions: &[usize; 8],
 ) -> Result<(Inputs, Vec<NonPrimitiveOpId>, Vec<ExprId>), Error> {
     let public_count = template.statement_layout().schema().base_len();
-    let key_descriptor = descriptor_words(template)?;
+    let key_descriptor = descriptor_digest(template)?;
     let set_words = positions
         .iter()
         .map(|index| wires.get(*index).copied().ok_or(Error::Shape))

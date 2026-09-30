@@ -8,9 +8,8 @@ use p3_air::{Air, BaseAir, symbolic::AirLayout};
 use p3_circuit_prover::CircuitVerifier;
 use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_lookup::symbolic::InteractionSymbolicBuilder;
-use p3_symmetric::{CryptographicHasher, PaddingFreeSponge};
+use p3_symmetric::{CryptographicHasher, Increment, Pad10Sponge, PaddingFreeSponge};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "[u32; 8]")]
@@ -52,9 +51,10 @@ impl TryFrom<[u32; 8]> for VerifierSetId {
         Ok(Self(words))
     }
 }
-// Structural: separate verifier-key and verifier-set hashes from application Poseidon domains.
 pub(super) const KEY: u32 = 0x5043_0201;
 pub(super) const VERIFIER_SET: u32 = 0x5043_0202;
+pub(super) const DESCRIPTOR: u32 = 0x5043_0203;
+const BACKEND_PROFILE: &str = "proof-client/plonky3-0.8/2";
 
 pub(super) fn hash(tag: u32, words: &[F]) -> [F; 8] {
     let domain = [
@@ -107,7 +107,23 @@ pub(super) fn descriptor(verifier: &CircuitVerifier<Config>) -> Result<Vec<u8>, 
         .collect::<Vec<_>>();
     Ok(serde_json::to_vec(&(
         FORMAT,
-        profile_identity()?,
+        (
+            BACKEND_PROFILE,
+            (
+                FRI.suite().as_u16(),
+                FRI.log_blowup(),
+                FRI.log_final_poly_len(),
+                FRI.max_log_arity(),
+                FRI.num_queries(),
+                FRI.commit_pow_bits(),
+                FRI.query_pow_bits(),
+                FRI.input_cap_height(),
+                FRI.commit_cap_height(),
+                FRI.num_random_codewords(),
+                FRI.salt_elements(),
+            ),
+            AUXILIARY_POW_BITS,
+        ),
         relation.table_packing(),
         relation.trace_degree_bits(),
         verifier.statement_layout().schema(),
@@ -122,44 +138,39 @@ pub(super) fn descriptor(verifier: &CircuitVerifier<Config>) -> Result<Vec<u8>, 
         constraints,
     ))?)
 }
-pub(super) fn descriptor_words(verifier: &CircuitVerifier<Config>) -> Result<Vec<F>, Error> {
-    Ok(Sha256::digest(descriptor(verifier)?)
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|pair| F::from_u16(u16::from_be_bytes([pair[0], pair[1]])))
-        .collect())
+pub(super) fn descriptor_digest(verifier: &CircuitVerifier<Config>) -> Result<[F; 8], Error> {
+    let mut bytes = descriptor(verifier)?;
+    bytes.push(1);
+    let words = bytes.chunks(3).map(|chunk| {
+        // PROOF: three little-endian bytes fit below the KoalaBear modulus.
+        F::from_u32(
+            chunk
+                .iter()
+                .rev()
+                .fold(0, |word, byte| (word << 8) | u32::from(*byte)),
+        )
+    });
+    let domain = [
+        F::from_u32(DESCRIPTOR),
+        F::ZERO,
+        F::ZERO,
+        F::ZERO,
+        F::ZERO,
+        F::ZERO,
+        F::ZERO,
+        F::ZERO,
+    ];
+    // PROOF: ONE is nonzero; Increment is a derangement over KoalaBear.
+    Ok(Pad10Sponge::<_, _, _, 16, 8, 8>::new(
+        p3_koala_bear::default_koalabear_poseidon2_16(),
+        Increment::new(F::ONE),
+    )
+    .hash_iter(domain.into_iter().chain(words)))
 }
 pub(super) fn key(verifier: &CircuitVerifier<Config>) -> Result<[F; 8], Error> {
-    let mut words = descriptor_words(verifier)?;
+    let mut words = descriptor_digest(verifier)?.to_vec();
     let common = verifier.common_data();
     let commitment = &common.preprocessed.as_ref().ok_or(Error::Shape)?.commitment;
     words.extend(commitment.roots().iter().flatten().copied());
     Ok(hash(KEY, &words))
-}
-// PROOF: backend changes invalidate derived keys without changing the circuit language.
-const BACKEND_PROFILE: &str = "proof-client/plonky3-0.8/1";
-
-fn profile_identity() -> Result<String, Error> {
-    let encoded = serde_json::to_vec(&(
-        BACKEND_PROFILE,
-        (
-            FRI.suite().as_u16(),
-            FRI.log_blowup(),
-            FRI.log_final_poly_len(),
-            FRI.max_log_arity(),
-            FRI.num_queries(),
-            FRI.commit_pow_bits(),
-            FRI.query_pow_bits(),
-            FRI.input_cap_height(),
-            FRI.commit_cap_height(),
-            FRI.num_random_codewords(),
-            FRI.salt_elements(),
-        ),
-        AUXILIARY_POW_BITS,
-    ))?;
-    Ok(Sha256::digest(encoded)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
 }

@@ -9,7 +9,6 @@ workspace = true
 
 [dependencies]
 tracing.workspace = true
-sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -45,6 +44,7 @@ p3-lookup.workspace = true
 p3-air.workspace = true
 
 [dev-dependencies]
+sha2.workspace = true
 mpz-circuits-core.workspace = true
 futures-rustls.workspace = true
 clap.workspace = true
