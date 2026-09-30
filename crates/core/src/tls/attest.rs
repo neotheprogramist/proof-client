@@ -1,4 +1,6 @@
-use super::commitment::{CommitmentError, CommitmentHash, CommitmentPolicy};
+use super::commitment::{
+    CommitmentError, CommitmentHash, CommitmentPolicy, koalabear_permutations,
+};
 use crate::tls::disclosure::{self, Disclosure, DisclosureError};
 use futures::{AsyncRead, AsyncWrite, AsyncWriteExt, TryFutureExt};
 use http::{HeaderName, HeaderValue, Method};
@@ -58,7 +60,7 @@ pub enum AttestError {
     Transcript,
     #[error("I/O failed: {0}")]
     Io(#[from] std::io::Error),
-    #[error("TLSN session failed")]
+    #[error("TLSN session failed ({})", tlsn_category(.0))]
     Tlsn(#[from] tlsn::Error),
     #[error("{reason}; session failed while rejecting: {source}")]
     Rejection {
@@ -78,6 +80,17 @@ pub enum AttestError {
     Prove(#[from] tlsn::config::prove::ProveConfigError),
     #[error(transparent)]
     Disclosure(#[from] DisclosureError),
+}
+fn tlsn_category(error: &tlsn::Error) -> &'static str {
+    if error.is_io() {
+        "I/O"
+    } else if error.is_config() {
+        "configuration"
+    } else if error.is_user() {
+        "user/protocol"
+    } else {
+        "internal"
+    }
 }
 impl std::fmt::Debug for AttestError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -176,62 +189,38 @@ impl Request {
     pub fn method(&self) -> &Method {
         &self.method
     }
-    pub fn bytes(&self) -> &[u8] {
-        &self.bytes
-    }
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Segment {
+pub(super) struct Segment {
     pub(super) start: usize,
     pub(super) bytes: Vec<u8>,
 }
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum ReportKind {
-    ProverDisclosure,
     LiveVerifierAccepted,
 }
+// Retain the existing peer wire format; verification is represented by VerifiedReport.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ReportData {
+pub(super) struct ReportData {
     kind: ReportKind,
     #[serde(flatten)]
     evidence: super::evidence::Evidence,
 }
 
-impl ReportData {
-    pub fn evidence(&self) -> &super::evidence::Evidence {
-        &self.evidence
-    }
-    pub fn server_name(&self) -> &str {
-        self.evidence.server_name()
-    }
-    pub fn redacted(&self) -> Result<Transcript, AttestError> {
-        self.evidence.redacted()
-    }
-    pub fn lengths(&self) -> (usize, usize) {
-        self.evidence.lengths()
-    }
-    pub fn commitments(&self) -> &[PlaintextHash] {
-        self.evidence.commitments()
-    }
-    pub(crate) fn accepted(mut self) -> Self {
-        self.kind = ReportKind::LiveVerifierAccepted;
-        self
-    }
-}
-
 #[derive(Serialize)]
-#[serde(transparent)]
-pub struct VerifiedReport(pub(super) ReportData);
+pub struct VerifiedReport {
+    pub(super) report: ReportData,
+}
 impl VerifiedReport {
-    pub fn data(&self) -> &ReportData {
-        &self.0
+    pub fn evidence(&self) -> &super::evidence::Evidence {
+        &self.report.evidence
     }
 }
 
 #[derive(Serialize)]
-pub struct Opening {
+pub(super) struct Opening {
     #[serde(serialize_with = "serialize_hash_secret")]
     secret: tlsn::transcript::hash::PlaintextHashSecret,
     plaintext: Vec<u8>,
@@ -257,34 +246,14 @@ impl Opening {
         }
         Ok(Self { secret, plaintext })
     }
-    pub fn secret(&self) -> &tlsn::transcript::hash::PlaintextHashSecret {
-        &self.secret
-    }
-    pub fn plaintext(&self) -> &[u8] {
-        &self.plaintext
-    }
 }
 
-pub struct ProverOutput {
+pub(super) struct ProverOutput {
     pub(super) report: ReportData,
     pub(super) transcript: Transcript,
     pub(super) openings: Vec<Opening>,
     pub(super) response: Vec<u8>,
     pub(super) selections: disclosure::SelectionAudit,
-}
-impl ProverOutput {
-    pub fn report(&self) -> &ReportData {
-        &self.report
-    }
-    pub fn transcript(&self) -> &Transcript {
-        &self.transcript
-    }
-    pub fn openings(&self) -> &[Opening] {
-        &self.openings
-    }
-    pub fn response(&self) -> &[u8] {
-        &self.response
-    }
 }
 
 fn hashes(commitments: Vec<TranscriptCommitment>) -> Result<Vec<PlaintextHash>, AttestError> {
@@ -313,7 +282,7 @@ fn hashes(commitments: Vec<TranscriptCommitment>) -> Result<Vec<PlaintextHash>, 
 fn admit_commitments(
     request: &tlsn::config::prove::ProveRequest,
     policy: CommitmentPolicy,
-) -> Result<(), AttestError> {
+) -> Result<usize, AttestError> {
     let (sent, received) = request.reveal().ok_or(AttestError::Missing)?;
     let mut sent_committed = tlsn::rangeset::set::RangeSet::default();
     let mut recv_committed = tlsn::rangeset::set::RangeSet::default();
@@ -339,14 +308,17 @@ fn admit_commitments(
         }
         occupied.union_mut(ranges);
         if let CommitmentPolicy::Poseidon2KoalaBear { max_permutations } = policy {
-            // PROOF: admitted ranges are bounded above; framing adds the 36-byte domain, 16-byte blinder and marker.
-            permutations += (ranges.len() + 36 + 16 + 1).div_ceil(3 * 8);
+            permutations += koalabear_permutations(ranges.len());
             if permutations > max_permutations.get() {
-                return Err(CommitmentError::Budget.into());
+                return Err(CommitmentError::Budget {
+                    required: permutations,
+                    limit: max_permutations,
+                }
+                .into());
             }
         }
     }
-    Ok(())
+    Ok(permutations)
 }
 
 fn segments(
@@ -366,7 +338,7 @@ fn segments(
 }
 
 #[tracing::instrument(skip_all)]
-pub async fn attest_session<T, S>(
+pub(super) async fn attest_session<T, S>(
     request: Request,
     disclosure: Disclosure,
     verifier_socket: T,
@@ -429,6 +401,24 @@ where
         if commit_sent.len() + commit_recv.len() > super::MAX_COMMITMENTS {
             return Err(DisclosureError::CommitmentLimit.into());
         }
+        let selections = disclosure::SelectionAudit {
+            sent: sent_selections,
+            received: received_selections,
+        };
+        for (direction, action, selector, ranges) in selections.entries() {
+            tracing::info!(phase = "selection_resolved", direction, action, selector = %selector, ?ranges);
+        }
+        if commitment_hash == CommitmentHash::Poseidon2KoalaBear {
+            let permutations = commit_sent
+                .iter()
+                .chain(&commit_recv)
+                .map(|r| koalabear_permutations(r.len()))
+                .sum::<usize>();
+            tracing::info!(
+                phase = "commitment_work_required",
+                koalabear_permutations = permutations
+            );
+        }
         tracing::info!(
             phase = "disclosure_resolved",
             sent_bytes = transcript.sent().len(),
@@ -456,7 +446,7 @@ where
         config.transcript_commit(commitments.build()?);
         let output = prover.prove(&config.build()?).await?;
         let report = ReportData {
-            kind: ReportKind::ProverDisclosure,
+            kind: ReportKind::LiveVerifierAccepted,
             evidence: super::evidence::Evidence {
                 server_name: request.domain.to_string(),
                 sent_len: private.sent().len(),
@@ -477,10 +467,7 @@ where
             report,
             transcript: private,
             openings,
-            selections: disclosure::SelectionAudit {
-                sent: sent_selections,
-                received: received_selections,
-            },
+            selections,
             response: response.into_body(),
         })
     };
@@ -529,29 +516,36 @@ where
         if !verifier.request().server_identity() {
             return Err(AttestError::Missing);
         }
-        if let Err(error) = admit_commitments(verifier.request(), policy) {
-            rejection = Some(error);
-            verifier.reject(Some("commitment policy rejected")).await?;
-            return Err(AttestError::Policy);
-        }
+        let permutations = match admit_commitments(verifier.request(), policy) {
+            Ok(permutations) => permutations,
+            Err(error) => {
+                tracing::info!(phase = "commitments_rejected", reason = %error);
+                rejection = Some(error);
+                verifier.reject(Some("commitment policy rejected")).await?;
+                return Err(AttestError::Policy);
+            }
+        };
+        tracing::info!(phase = "commitments_admitted", commitment_hash = %policy.hash(), koalabear_permutations = permutations);
         let (output, verifier) = verifier.accept().await?;
         verifier.close().await?;
         handle.close();
         let transcript = output.transcript.ok_or(AttestError::Missing)?;
-        Ok(VerifiedReport(ReportData {
-            kind: ReportKind::LiveVerifierAccepted,
-            evidence: super::evidence::Evidence {
-                server_name: output.server_name.ok_or(AttestError::Missing)?.to_string(),
-                sent_len: transcript.len_sent(),
-                received_len: transcript.len_received(),
-                sent: segments(transcript.sent_unsafe(), transcript.sent_authed().iter())?,
-                received: segments(
-                    transcript.received_unsafe(),
-                    transcript.received_authed().iter(),
-                )?,
-                commitments: hashes(output.transcript_commitments)?,
+        Ok(VerifiedReport {
+            report: ReportData {
+                kind: ReportKind::LiveVerifierAccepted,
+                evidence: super::evidence::Evidence {
+                    server_name: output.server_name.ok_or(AttestError::Missing)?.to_string(),
+                    sent_len: transcript.len_sent(),
+                    received_len: transcript.len_received(),
+                    sent: segments(transcript.sent_unsafe(), transcript.sent_authed().iter())?,
+                    received: segments(
+                        transcript.received_unsafe(),
+                        transcript.received_authed().iter(),
+                    )?,
+                    commitments: hashes(output.transcript_commitments)?,
+                },
             },
-        }))
+        })
     };
     let result = futures::try_join!(driver.err_into::<AttestError>(), operation);
     match (rejection, result) {

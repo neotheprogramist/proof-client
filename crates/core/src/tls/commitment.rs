@@ -9,6 +9,13 @@ pub enum CommitmentHash {
 }
 
 impl CommitmentHash {
+    pub const ALL: [Self; 2] = [Self::Blake3, Self::Poseidon2KoalaBear];
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Blake3 => "blake3",
+            Self::Poseidon2KoalaBear => "poseidon2-koalabear-16-pad10-v1",
+        }
+    }
     pub const fn id(self) -> HashAlgId {
         match self {
             Self::Blake3 => HashAlgId::BLAKE3,
@@ -17,23 +24,24 @@ impl CommitmentHash {
     }
 }
 
+pub(super) fn koalabear_permutations(bytes: usize) -> usize {
+    // PROOF: callers bound selected bytes by MAX_SENT/MAX_RECEIVED; framing adds 53 bytes.
+    (bytes + 36 + 16 + 1).div_ceil(3 * 8)
+}
+
 impl fmt::Display for CommitmentHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Blake3 => "blake3",
-            Self::Poseidon2KoalaBear => "poseidon2-koalabear-16-pad10-v1",
-        })
+        f.write_str(self.as_str())
     }
 }
 
 impl FromStr for CommitmentHash {
     type Err = CommitmentError;
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "blake3" => Ok(Self::Blake3),
-            "poseidon2-koalabear-16-pad10-v1" => Ok(Self::Poseidon2KoalaBear),
-            _ => Err(CommitmentError::Algorithm),
-        }
+        Self::ALL
+            .into_iter()
+            .find(|hash| hash.as_str() == value)
+            .ok_or(CommitmentError::Algorithm)
     }
 }
 
@@ -74,6 +82,11 @@ pub enum CommitmentError {
     MissingBudget,
     #[error("--max-commitment-permutations applies only to KoalaBear")]
     UnexpectedBudget,
-    #[error("KoalaBear commitments exceed the verifier's permutation budget")]
-    Budget,
+    #[error(
+        "KoalaBear commitments exceed the verifier's permutation budget: at least {required} required, {limit} allowed"
+    )]
+    Budget {
+        required: usize,
+        limit: NonZeroUsize,
+    },
 }

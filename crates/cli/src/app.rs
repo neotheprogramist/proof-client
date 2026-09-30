@@ -1,9 +1,10 @@
 use crate::files::{FileError, Output, read};
 use crate::{identity::IdentityError, stdio};
 use base64::{Engine, engine::general_purpose::STANDARD};
+use clap::builder::{PossibleValuesParser, TypedValueParser};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use proof_client_core::{
-    proof::{self as prover, Artifact, Job, PublicInput},
+    proof::{self as prover, Artifact, PublicInput},
     tls::{
         attest,
         commitment::{CommitmentHash, CommitmentPolicy},
@@ -115,14 +116,13 @@ pub enum Command {
     Attest(Attest),
     /// Inspect a saved TLS record; this does not repeat live verification.
     Inspect {
-        /// Run directory containing metadata.json.
-        #[arg(long)]
-        run: PathBuf,
+        /// Saved metadata file, including custom --metadata-output paths.
+        path: PathBuf,
     },
     /// Accept one live TLSN disclosure for the expected HTTPS target.
     Serve {
         /// Admit only this commitment hash; peers must select the same suite.
-        #[arg(long, default_value_t = CommitmentHash::default())]
+        #[arg(long, default_value_t = CommitmentHash::default(), value_parser = commitment_hash_parser())]
         commitment_hash: CommitmentHash,
         /// Required for KoalaBear: total permutation budget per session.
         #[arg(long)]
@@ -142,7 +142,7 @@ pub enum Command {
         /// Explicit target CA bundle; otherwise use the pinned Mozilla roots.
         #[arg(long)]
         target_ca: Option<PathBuf>,
-        /// New record path; otherwise create a timestamped run directory.
+        /// New record path; otherwise create a unique run directory.
         #[arg(long)]
         metadata_output: Option<PathBuf>,
     },
@@ -150,7 +150,7 @@ pub enum Command {
 impl Command {
     fn admit_native(self, storage: &Storage) -> Result<Self, CliError> {
         let paths = match &self {
-            Self::Inspect { run } => vec![run],
+            Self::Inspect { path } => vec![path],
             Self::Prepare {
                 circuit, output, ..
             } => vec![circuit, output],
@@ -196,7 +196,7 @@ impl Command {
 #[derive(Args)]
 pub struct Attest {
     /// Hash each committed selection using this suite.
-    #[arg(long, default_value_t = CommitmentHash::default())]
+    #[arg(long, default_value_t = CommitmentHash::default(), value_parser = commitment_hash_parser())]
     commitment_hash: CommitmentHash,
     #[command(flatten)]
     request: crate::request::RequestArgs,
@@ -215,7 +215,7 @@ pub struct Attest {
     /// Target trust bundle; otherwise use the pinned Mozilla roots.
     #[arg(long)]
     target_ca: Option<PathBuf>,
-    /// New record path; otherwise create a timestamped run directory.
+    /// New record path; otherwise create a unique run directory.
     #[arg(long)]
     metadata_output: Option<PathBuf>,
 }
@@ -235,7 +235,7 @@ pub enum Execution {
         public: Vec<u32>,
     },
     Served {
-        receipt: quic::Receipt,
+        receipt: attest::VerifiedReport,
         metadata_output: String,
     },
     Attested {
@@ -263,13 +263,13 @@ impl Execution {
                 receipt,
                 metadata_output,
             } => {
-                json!({"evidence":receipt.metadata(),"metadata_output":metadata_output,"verification":"live-tls-disclosure"})
+                json!({"evidence":receipt.evidence(),"metadata_output":metadata_output,"verification":"live-tls-disclosure"})
             }
             Self::Attested {
                 artifact,
                 metadata_output,
             } => {
-                json!({"evidence":artifact.receipt().metadata(),"selections":artifact.selections(),"metadata_output":metadata_output,"verification":"live-tls-disclosure"})
+                json!({"evidence":artifact.receipt().evidence(),"selections":artifact.selections(),"metadata_output":metadata_output,"verification":"live-tls-disclosure"})
             }
             Self::Inspected { record, path } => {
                 json!({"record":record,"path":path,"verification":"not-performed"})
@@ -282,7 +282,7 @@ impl Execution {
                 receipt,
                 metadata_output,
             } => {
-                let transcript = receipt.report().redacted()?;
+                let transcript = receipt.evidence().redacted()?;
                 let mut bytes = b"--- Sent ---\n".to_vec();
                 bytes.extend_from_slice(transcript.sent());
                 bytes.extend_from_slice(b"\n--- Received ---\n");
@@ -303,10 +303,8 @@ impl Execution {
 }
 #[derive(thiserror::Error)]
 pub enum CliError {
-    #[error("invalid command line ({0}); use --help for supported arguments")]
-    Arguments(clap::error::ErrorKind),
-    #[error("{0}")]
-    MissingArguments(#[source] clap::Error),
+    #[error("{}", argument_error(.0))]
+    Arguments(#[from] clap::Error),
     #[error("--format raw requires the attest command")]
     RawFormat,
     #[error(transparent)]
@@ -336,10 +334,39 @@ pub enum CliError {
     #[error("incompatible launch or command arguments")]
     Invocation,
 }
+fn argument_error(error: &clap::Error) -> String {
+    use clap::error::{ContextKind, ErrorKind};
+    if error.kind() == ErrorKind::MissingRequiredArgument {
+        return error.to_string();
+    }
+    let mut message = format!("invalid command line ({})", error.kind());
+    // Only schema-owned names and choices are safe; values may contain credentials.
+    if matches!(
+        error.kind(),
+        ErrorKind::InvalidValue
+            | ErrorKind::ValueValidation
+            | ErrorKind::TooFewValues
+            | ErrorKind::WrongNumberOfValues
+    ) {
+        if let Some(argument) = error.get(ContextKind::InvalidArg) {
+            message.push_str(&format!(" for {argument}"));
+        }
+        if let Some(choices) = error.get(ContextKind::ValidValue) {
+            message.push_str(&format!("; expected {choices}"));
+        }
+    }
+    message.push_str("; use --help for supported arguments");
+    message
+}
 impl std::fmt::Debug for CliError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self, f)
     }
+}
+
+fn commitment_hash_parser() -> impl TypedValueParser<Value = CommitmentHash> {
+    PossibleValuesParser::new(CommitmentHash::ALL.map(CommitmentHash::as_str))
+        .try_map(|value| value.parse::<CommitmentHash>())
 }
 
 fn workers(requested: Option<NonZeroUsize>) -> Result<NonZeroUsize, CliError> {
@@ -363,16 +390,14 @@ pub fn invoke(
     args: Vec<String>,
     ready: impl FnMut(SocketAddr) -> Result<(), CliError>,
 ) -> Result<Value, CliError> {
-    let parsed = Invocation::try_parse_from(std::iter::once("proof-client".to_owned()).chain(args));
-    match parsed {
-        Ok(invocation) => Ok(execute(
-            invocation.command.admit_native(&invocation.storage)?,
-            &invocation.storage,
-            ready,
-        )?
-        .native()?),
-        Err(error) => Err(CliError::Arguments(error.kind())),
-    }
+    let invocation =
+        Invocation::try_parse_from(std::iter::once("proof-client".to_owned()).chain(args))?;
+    execute(
+        invocation.command.admit_native(&invocation.storage)?,
+        &invocation.storage,
+        ready,
+    )?
+    .native()
 }
 
 pub fn execute(
@@ -381,8 +406,7 @@ pub fn execute(
     mut ready: impl FnMut(SocketAddr) -> Result<(), CliError>,
 ) -> Result<Execution, CliError> {
     match command {
-        Command::Inspect { run } => {
-            let path = run.join("metadata.json");
+        Command::Inspect { path } => {
             let record = proof_client_core::tls::evidence::Record::parse(&read(
                 &path,
                 prover::MAX_INPUT_BYTES,
@@ -394,6 +418,7 @@ pub fn execute(
             threads,
             output,
         } => {
+            tracing::info!(phase = "reading_inputs", operation = "prepare", ?circuit);
             let out = Output::prepare(&output)?;
             let metadata = prover::prepare(crate::files::circuit(&circuit)?, workers(threads)?)?;
             let output = out.path().to_owned();
@@ -407,11 +432,22 @@ pub fn execute(
             threads,
             output,
         } => {
+            tracing::info!(
+                phase = "reading_inputs",
+                operation = "prove",
+                ?circuit,
+                ?public,
+                ?witness
+            );
             let out = Output::prepare(&output)?;
             let circuit = crate::files::circuit(&circuit)?;
             let public = PublicInput::parse(&read(&public, prover::MAX_INPUT_BYTES)?)?;
-            let job = Job::parse(circuit, public, &read(&witness, prover::MAX_WITNESS_BYTES)?)?;
-            let proof = prover::prove(job, workers(threads)?)?;
+            let proof = prover::prove(
+                circuit,
+                public,
+                &read(&witness, prover::MAX_WITNESS_BYTES)?,
+                workers(threads)?,
+            )?;
             let output = out.path().to_owned();
             out.publish(&proof)?;
             Ok(Execution::Proved {
@@ -426,6 +462,13 @@ pub fn execute(
             proof,
             threads,
         } => {
+            tracing::info!(
+                phase = "reading_inputs",
+                operation = "verify",
+                ?circuit,
+                ?public,
+                ?proof
+            );
             let circuit = crate::files::circuit(&circuit)?;
             let public = PublicInput::parse(&read(&public, prover::MAX_INPUT_BYTES)?)?;
             let proof = Artifact::parse(&read(&proof, prover::MAX_PROOF_BYTES)?)?;
@@ -460,13 +503,13 @@ pub fn execute(
                 &read(&key, MAX_LOCAL_INPUT_BYTES)?,
             )?;
             let roots = quic::roots(pem(target_ca.as_deref())?.as_deref())?;
-            tracing::info!(phase = "inputs_parsed", expected_target = ?server_name, commitment_hash = %commitment_hash, ?max_commitment_permutations);
+            tracing::info!(phase = "inputs_parsed", operation = "serve", expected_target = ?server_name, ?cert, ?target_ca, commitment_hash = %commitment_hash, ?max_commitment_permutations);
             let receipt = runtime()?.block_on(async {
                 let verifier = quic::Verifier::bind(listen, config, &server_name, roots, policy)?;
                 ready(verifier.local_addr()?)?;
                 Ok::<_, CliError>(verifier.verify().await?)
             })?;
-            metadata.publish(&receipt.metadata())?;
+            metadata.publish(&receipt.evidence())?;
             Ok(Execution::Served {
                 receipt,
                 metadata_output,
@@ -482,12 +525,12 @@ pub fn execute(
     }
 }
 
-pub fn attest(args: Attest, storage: &Storage) -> Result<(quic::Attestation, String), CliError> {
+fn attest(args: Attest, storage: &Storage) -> Result<(quic::Attestation, String), CliError> {
     let metadata = Output::metadata(args.metadata_output.as_deref(), &storage.data_dir, "attest")?;
     let metadata_output = metadata.path().to_owned();
     let request = args.request.parse()?;
-    let disclosure = match args.disclosure {
-        Some(path) => Disclosure::parse(&read(&path, MAX_LOCAL_INPUT_BYTES)?)?,
+    let disclosure = match &args.disclosure {
+        Some(path) => Disclosure::parse(&read(path, MAX_LOCAL_INPUT_BYTES)?)?,
         None => Disclosure::default(),
     };
     let verifier_ca = args
@@ -499,8 +542,7 @@ pub fn attest(args: Attest, storage: &Storage) -> Result<(quic::Attestation, Str
         quic::roots(Some(&read(&verifier_ca, MAX_LOCAL_INPUT_BYTES)?))?,
     )?;
     let roots = quic::roots(pem(args.target_ca.as_deref())?.as_deref())?;
-    tracing::info!(phase = "inputs_parsed", verifier = %args.verifier, verifier_name = ?args.verifier_name, target = ?request.server_name(), method = %request.method(), action = "send new HTTPS request");
-    tracing::info!(commitment_hash = %args.commitment_hash);
+    tracing::info!(phase = "inputs_parsed", operation = "attest", verifier = %args.verifier, verifier_name = ?args.verifier_name, ?verifier_ca, target_ca = ?args.target_ca, disclosure = ?args.disclosure, target = ?request.server_name(), method = %request.method(), commitment_hash = %args.commitment_hash, action = "send new HTTPS request");
     let artifact = runtime()?.block_on(quic::attest(
         request,
         disclosure,
@@ -508,6 +550,7 @@ pub fn attest(args: Attest, storage: &Storage) -> Result<(quic::Attestation, Str
         roots,
         args.commitment_hash,
     ))?;
+    tracing::info!(phase = "publishing_private_record", output = ?metadata_output);
     metadata.publish(&artifact.metadata())?;
     Ok((artifact, metadata_output))
 }

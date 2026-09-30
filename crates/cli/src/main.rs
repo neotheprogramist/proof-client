@@ -15,35 +15,33 @@ fn main() -> Result<(), CliError> {
                 error.print()?;
                 return Ok(());
             }
-            clap::error::ErrorKind::MissingRequiredArgument => {
-                return Err(CliError::MissingArguments(error));
-            }
-            kind => return Err(CliError::Arguments(kind)),
+            _ => return Err(error.into()),
         },
     };
     match (cli.command, cli.origin, cli.format) {
-        (Some(Command::Attest(args)), None, Format::Raw) => {
-            let (artifact, _) = app::attest(args, &cli.storage)?;
-            let mut output = io::stdout().lock();
-            // PROOF: --format raw explicitly requests the private response bytes.
-            output.write_all(artifact.response())?;
-            output.flush()?;
-        }
-        (Some(_), None, Format::Raw) => return Err(CliError::RawFormat),
-        (Some(command), None, Format::Human) => {
+        (Some(command), None, format) => {
+            if format == Format::Raw && !matches!(command, Command::Attest(_)) {
+                return Err(CliError::RawFormat);
+            }
             let result = app::execute(command, &cli.storage, |_| Ok(()))?;
             let mut output = io::stdout().lock();
-            proof_client::report::human(&mut output, &result)?;
+            match format {
+                Format::Human => proof_client::report::human(&mut output, &result)?,
+                Format::Json => emit(
+                    &mut output,
+                    &Event::Completed {
+                        result: result.json(),
+                    },
+                )?,
+                Format::Raw => {
+                    let app::Execution::Attested { artifact, .. } = result else {
+                        return Err(CliError::RawFormat);
+                    };
+                    // PROOF: --format raw explicitly requests the private response bytes.
+                    output.write_all(artifact.response())?;
+                }
+            }
             output.flush()?;
-        }
-        (Some(command), None, Format::Json) => {
-            let result = app::execute(command, &cli.storage, |_| Ok(()))?;
-            emit(
-                &mut io::stdout().lock(),
-                &Event::Completed {
-                    result: result.json(),
-                },
-            )?;
         }
         (None, Some(origin), Format::Human) => {
             parse_origin(&origin)?;
@@ -56,6 +54,5 @@ fn main() -> Result<(), CliError> {
 fn emit(writer: &mut impl Write, value: &impl serde::Serialize) -> Result<(), CliError> {
     serde_json::to_writer(&mut *writer, value)?;
     writer.write_all(b"\n")?;
-    writer.flush()?;
     Ok(())
 }

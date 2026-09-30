@@ -31,25 +31,6 @@ impl Metadata {
         &self.verifier_sets
     }
 }
-pub struct Job {
-    circuit: Circuit,
-    assignment: Assignment,
-}
-impl Job {
-    pub fn parse(circuit: Circuit, public: PublicInput, bytes: &[u8]) -> Result<Self, Error> {
-        let definition = circuit.definition(&circuit.entry)?;
-        let assignment = Assignment::parse(
-            public,
-            bytes,
-            definition.inputs,
-            definition.verifications().count(),
-        )?;
-        Ok(Self {
-            circuit,
-            assignment,
-        })
-    }
-}
 pub struct Session {
     entry: PathBuf,
     pub(super) prepared: BTreeMap<PathBuf, Prepared>,
@@ -65,10 +46,9 @@ impl Session {
             match source.sources.get(path).ok_or(Error::Shape)? {
                 Source::Circuit(definition) => {
                     tracing::info!(phase = "circuit_inputs", source = ?path, public_words = definition.inputs.public, private_words = definition.inputs.private, child_proofs = definition.verifications().count());
-                    prepared.insert(
-                        path.clone(),
-                        compiler::compile(definition, &prepared, engine::prepare)?,
-                    );
+                    let compiled = compiler::compile(definition, &prepared, engine::prepare)?;
+                    tracing::info!(phase = "circuit_prepared", source = ?path, circuit_id = ?compiled.id.words());
+                    prepared.insert(path.clone(), compiled);
                 }
                 Source::VerifierSet(set) => {
                     let members = recursion::compile(&source, set, &prepared)?;
@@ -77,6 +57,7 @@ impl Session {
                         .flat_map(|member| member.id.words().iter().copied().map(F::new))
                         .collect::<Vec<_>>();
                     let root = VerifierSetId::from_root(hash(VERIFIER_SET, &keys));
+                    tracing::info!(phase = "verifier_set_prepared", source = ?path, verifier_set_id = ?root.words());
                     sets.insert(path.clone(), root);
                     for (path, mut member) in set.circuits.iter().zip(members) {
                         // Bind after key derivation to avoid a self-referential set ID.
@@ -85,6 +66,7 @@ impl Session {
                             .into_iter()
                             .zip(*root.words())
                             .collect();
+                        tracing::info!(phase = "circuit_prepared", source = ?path, circuit_id = ?member.id.words());
                         prepared.insert(path.clone(), member);
                     }
                 }
@@ -180,9 +162,21 @@ pub fn with_session<R: Send>(
 pub fn prepare(circuit: Circuit, threads: NonZeroUsize) -> Result<Metadata, Error> {
     with_session(circuit, threads, Session::metadata)
 }
-pub fn prove(job: Job, threads: NonZeroUsize) -> Result<Artifact, Error> {
-    with_session(job.circuit, threads, |session| {
-        session.prove_assignment(&session.entry, job.assignment)
+pub fn prove(
+    circuit: Circuit,
+    public: PublicInput,
+    witness: &[u8],
+    threads: NonZeroUsize,
+) -> Result<Artifact, Error> {
+    let definition = circuit.definition(&circuit.entry)?;
+    let assignment = Assignment::parse(
+        public,
+        witness,
+        definition.inputs,
+        definition.verifications().count(),
+    )?;
+    with_session(circuit, threads, |session| {
+        session.prove_assignment(&session.entry, assignment)
     })
 }
 pub fn verify(

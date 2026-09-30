@@ -223,7 +223,7 @@ pub fn human(writer: &mut impl Write, result: &Execution) -> Result<(), CliError
             metadata_output,
         } => {
             writeln!(writer, "Live TLS disclosure accepted")?;
-            evidence(writer, receipt.metadata(), |_, _| Ok(String::new()))?;
+            evidence(writer, receipt.evidence(), |_, _| Ok(String::new()))?;
             writeln!(
                 writer,
                 "\nRecord: {metadata_output:?}\nCommitment openings remain with the prover. This record is not a portable attestation."
@@ -241,7 +241,7 @@ pub fn human(writer: &mut impl Write, result: &Execution) -> Result<(), CliError
                 writer,
                 "Local plaintext: all transcript bytes; labels describe disclosure to the verifier."
             )?;
-            evidence(writer, artifact.receipt().metadata(), |direction, range| {
+            evidence(writer, artifact.receipt().evidence(), |direction, range| {
                 let bytes = match direction {
                     Direction::Sent => artifact.transcript().sent(),
                     Direction::Received => artifact.transcript().received(),
@@ -254,7 +254,7 @@ pub fn human(writer: &mut impl Write, result: &Execution) -> Result<(), CliError
             selections(
                 writer,
                 artifact.selections(),
-                artifact.receipt().metadata().commitments(),
+                artifact.receipt().evidence().commitments(),
             )?;
             writeln!(
                 writer,

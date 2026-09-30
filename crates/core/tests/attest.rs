@@ -129,7 +129,7 @@ async fn invalid_commitments_are_rejected_before_hash_proofs() {
             assert!(matches!(
                 result,
                 Err(attest::AttestError::Commitment(
-                    proof_client_core::tls::commitment::CommitmentError::Budget
+                    proof_client_core::tls::commitment::CommitmentError::Budget { .. }
                 ))
             ));
         } else if algorithm == HashAlgId::SHA256 {

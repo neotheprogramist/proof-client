@@ -9,7 +9,7 @@ The CLI is the primary interface for running, auditing and reproducing project w
 | `verify`  | Check against independently expected public input       | Verified circuit ID and public words                 |
 | `serve`   | Accept one live disclosure for an expected HTTPS target | Authenticated transcript ranges and commitments      |
 | `attest`  | Send a new HTTPS request and apply a disclosure policy  | Matching verifier receipt and private opening record |
-| `inspect` | Read a saved TLS run                                    | Untrusted recorded evidence; no live verification    |
+| `inspect` | Read a saved TLS record                                 | Untrusted recorded evidence; no live verification    |
 
 Circuit proofs and TLS disclosure are independent workflows. A circuit proof does not establish TLS provenance; authenticated transcript bytes do not establish hidden JSON relationships.
 
@@ -36,23 +36,22 @@ Human-readable reports are the default. Stderr records observed stages; stdout c
 - `attest --format raw` emits the exact private response body. It adds no newline; zsh may display `%` after an unterminated line. Other commands reject raw output before I/O.
 - Reports show byte ranges as `[start, end)`, escaping control and non-ASCII bytes. Live `attest` reports print every transcript byte, including cookies and committed values; disclosure labels describe what the verifier receives. `serve` and `inspect` print plaintext only for revealed ranges. Displayed text is not reconstructed JSON.
 
-Progress identifies proof preparation and self-verification, or TLS connection, disclosure, verification and receipt matching. Publication is separate from verification.
+Progress reports input paths and trust configuration, workers, prepared circuit/set IDs, framed response lengths, selector-to-wire ranges, required/admitted commitment work, verification, receipt matching and publication. These observations appear as each stage completes, including before later failures. Selector labels are local interpretations, not authenticated ancestry. Stderr never includes witness or request values; selector names and source paths are visible. Library callers install their own tracing subscriber.
 
-Inspect a run by replacing the placeholder with the parent directory of the reported metadata file:
+Inspect the exact metadata path printed by `serve` or `attest`, including custom `--metadata-output` files:
 
 ```sh
-run_dir='.data/runs/REPLACE_WITH_REPORTED_RUN_NAME'
-cargo run --release --locked --bin proof-client -- inspect --run "$run_dir"
-cargo run --release --locked --bin proof-client -- inspect --run "$run_dir" --format json
+record='.data/runs/REPLACE_WITH_REPORTED_RUN_NAME/metadata.json'
+cargo run --release --locked --bin proof-client -- inspect "$record"
 ```
 
-TLS records retain disclosed bytes and offsets, lengths and commitments. Prover records also retain private openings and normalized selector-to-range mappings; inspection omits openings. Older records without disclosed segments show only their recorded summary. Records are mutable local evidence, not portable attestations; inspection never repeats TLS verification.
+TLS records retain disclosed bytes and offsets, lengths and commitments. Prover records also retain private openings and normalized selector-to-range mappings; inspection omits openings. Inspection checks range bounds and mapping consistency; it does not re-evaluate selector meanings. Older records without mappings or disclosed segments remain readable. Records are mutable local evidence, not portable attestations; inspection never repeats TLS verification.
 
 For reproduction, retain trusted circuit sources, expected public inputs and required private inputs explicitly. `--locked` uses the checked-in dependency lock. Fresh proofs and blinded commitments need not have identical bytes. Attestation sends a new request; the remote response may change. Full requests, hidden transcripts and response bodies are not saved automatically.
 
 ## Serve / attest
 
-Both peers must use this patched build; its mux protocol differs from unpatched TLSNotary alpha.15. Verifier endpoints are loopback-only and use QUIC/TLS 1.3. The target uses TLSN’s TLS 1.2/HTTP/1.1 baseline and Mozilla roots, or a replacement `--target-ca` bundle. Attest trusts the local verifier certificate, or `--verifier-ca`. Each connection carries one attestation; local clients are not authenticated. Tracing excludes request values and witnesses; it may include addresses, paths and byte/input counts. Library consumers install their own subscriber.
+Both peers must use this patched build; its mux protocol differs from unpatched TLSNotary alpha.15. Verifier endpoints are loopback-only and use QUIC/TLS 1.3. The target uses TLSN’s TLS 1.2/HTTP/1.1 baseline and Mozilla roots, or a replacement `--target-ca` bundle. Attest trusts the local verifier certificate, or `--verifier-ca`. Each connection carries one attestation; local clients are not authenticated.
 
 Only user-selected authenticated transcript ranges may be disclosed to the verifier. Requests, witnesses and undisclosed response bytes remain local. Selected commitment ranges and blinded digests are public; protocol metadata and transcript lengths are part of the disclosure baseline.
 
@@ -60,9 +59,9 @@ Only user-selected authenticated transcript ranges may be disclosed to the verif
 
 Host must match the URL and Content-Length must match the body; suppressing either is unsupported. Explicit Connection accepts `close` or `keep-alive`; Accept-Encoding accepts only `identity`. Compressed responses, redirects, retries, proxying, file uploads, curl configuration files and multiple URLs are unsupported. Unsupported options fail explicitly; there is no general curl-command parser or shell execution. Request arguments can appear in shell history and process listings; `cargo run` also prints them.
 
-The CLI defaults to `--data-dir .data`, verifier address `127.0.0.1:7047`, verifier TLS name `localhost`, and identity files `identity/verifier.pem` and `identity/verifier.key` beneath the data directory. `serve --server-name` independently specifies the expected HTTPS target. Missing identity files fail; nothing generates or trusts a certificate implicitly. Existing path/address flags override these defaults.
+Use `serve --help` and `attest --help` for flags and defaults. `serve --server-name` is the independently expected HTTPS target; it is distinct from the local verifier's TLS name. Missing identities fail; commands never create or trust certificates implicitly.
 
-Metadata is saved under `<data-dir>/runs/{attest,serve}.<UTC datetime>/metadata.json`, or `--metadata-output`, and reported on stderr. Destinations must be unused; collisions fail without overwriting. Runtime artifacts are ignored under `.data/`; builds use `target/`.
+Metadata uses `<data-dir>/runs/{attest,serve}.<random>/metadata.json`, or `--metadata-output`. Publication reports the exact path and never overwrites an existing destination. Prover records contain private openings. Runtime artifacts belong under `.data/`; builds use `target/`.
 
 Omitting `--disclosure` hides all transcript bytes and creates no explicit commitments. A supplied [policy](examples/mbank/disclosure.json) has symmetric `reveal` and `commit` objects, each containing `sent` and `received` selections. Omitted objects/directions and empty arrays select nothing; `{}` hides everything. Unknown fields, missing selectors and overlapping reveal/commit ranges fail. Revealed ranges form a union. Each distinct committed selection produces one independently openable blinded commitment (BLAKE3 by default). Identical selections share a commitment; empty or partially overlapping committed selections fail. All wire ranges of one selection, including across HTTP chunks, share its digest and blinder. The per-session count limit is `MAX_COMMITMENTS` in `crates/core/src/tls/mod.rs`.
 
@@ -80,11 +79,11 @@ Live commitment numbers follow transcript order, sent before received. Match ope
 
 Selectors use JSON Pointer escaping (`~0` for `~`, `~1` for `/`). Original bytes, including decimal spelling and string escapes, are preserved across HTTP chunks. Duplicate decoded keys fail. There are no wildcard queries, implicit structural disclosures or policy-file discovery.
 
-TLSN authenticates selected bytes and positions, not hidden JSON ancestry, account ownership, freshness or completeness. Application statements require authenticated context or a separate proof. Successful live operations construct `VerifiedReport` and `Receipt`; deserialized `ReportData` is untrusted. Native messaging displays hidden/committed bytes as 🙈/🔒.
+TLSN authenticates selected bytes and positions, not hidden JSON ancestry, account ownership, freshness or completeness. Application statements require authenticated context or a separate proof. Only live verification or a matched receipt constructs `VerifiedReport`; saved records carry no verification authority. Native messaging displays hidden/committed bytes as 🙈/🔒.
 
 Receipt validation, QUIC closure, metadata publication and stdout delivery are separate transitions. Metadata is saved before stdout; a save or broken pipe failure can follow successful remote verification. Published files remain. There are no automatic retries.
 
-Idle listeners wait for a client. `SESSION_TIMEOUT` in `crates/core/src/tls/attest.rs` bounds the connected session; Quinn's default idle timeout can expire sooner during silent computation. Synchronous circuit work is not preempted by a cooperative deadline. After closure, `draining_transport` waits for Quinn’s RTT-dependent three-PTO timer, outside the session deadline; `transport_drained` confirms shutdown. One framed HTTP response completes without EOF; surplus bytes are discarded.
+Idle listeners wait for a client. `SESSION_TIMEOUT` in `crates/core/src/tls/attest.rs` bounds the connected session; Quinn's default idle timeout can expire sooner during silent computation. Synchronous circuit work is not preempted by a cooperative deadline. After closure, `draining_transport` waits for Quinn’s RTT-dependent three-PTO timer, outside the session deadline; `transport_drained` confirms shutdown. HTTP framing can finish before EOF, but completing the TLS session still requires peer closure. Use `Connection: close`; keep-alive can wait until the session deadline. Surplus HTTP bytes are discarded.
 
 ### KoalaBear commitments
 
@@ -96,7 +95,7 @@ The frozen suite uses private TLSNotary ID 128, stock Plonky3 v0.8.0 KoalaBear P
 
 Hash the domain `tlsn/poseidon2/koalabear/16/pad10/v1`, selected bytes in transcript order, the independent 16-byte blinder, and byte `01`; zero-fill to a multiple of three bytes and pack each triple little-endian. Apply stock `Pad10Sponge` with overwrite absorption and `Increment(ONE)`. Partial final blocks append field one and zeros; full final blocks increment the first capacity element. Update boundaries introduce no separators.
 
-The new suite is exposed through the Rust and CLI interfaces. SDK/WASM mappings are unchanged. Existing circuit `poseidon2` operations retain their separate encoding; they cannot directly verify these openings. Opening-proof circuits are not shipped or tested here. A later consumer must bind its public digest, suite and selection to accepted TLS evidence and reject noncanonical digest words. A saved metadata file alone supplies no authority.
+Circuit `poseidon2` uses a separate encoding and cannot directly verify TLS openings. Opening-proof circuits are not shipped. Consumers must bind canonical digests, suites and selections to accepted TLS evidence; saved metadata supplies no authority. SDK/WASM mappings are unchanged.
 
 ### Local fixture
 
@@ -110,9 +109,7 @@ cargo run --release --locked --example certificates
 cargo run --release --locked --example fixture
 ```
 
-The `certificates` example gets or creates a self-signed `localhost` certificate and private key in `.data/identity/` **only to authenticate the local verifier**. QUIC uses TLS 1.3: Serve presents this identity and Attest trusts it through `--verifier-ca`. These files do not authenticate the HTTPS target. No certificate is installed in a system trust store.
-
-The fixture gets or creates its own HTTPS identity, `.data/fixture/target.pem` and `target.key`. Both examples create a pair only when both files are absent and validate existing pairs before reuse. Partial or invalid identities fail without replacement. Interruption between the two file publications can leave a partial pair; initialization never repairs it. Initialization is serialized by a file lock; private keys are created with owner-only permissions on Unix. `--directory` overrides each example's default for isolated workflows. The fixture writes no commands to stdout. Wait for its `ready` tracing event on stderr.
+The verifier identity lives in `.data/identity/`; the fixture has a separate target identity in `.data/fixture/`. Neither is installed in a system trust store. Examples lock initialization, validate existing pairs and create only absent pairs; partial pairs fail without repair. Unix private keys are owner-only. Use `--directory` for isolated runs and wait for the fixture's `ready` event.
 
 Terminal 2: start Serve:
 
@@ -134,76 +131,15 @@ cargo run --release --locked --bin proof-client -- attest \
   --data-raw '{}'
 ```
 
-Both reports show the disclosed HTTP lines, `"AvailableBalance":42.1200` and `"currency":"PLN"` as escaped bytes, and the account commitment ranges. Check that counts reconcile with transcript lengths and that the commitment digest matches between peers. Serve must omit cookie and account plaintext; Attest prints every range's plaintext and the local selector mapping. The mapping is not proof of JSON ancestry. The account value is retained in private opening metadata. Response cookie and account values are reproducible synthetic placeholders. All three processes exit after one completed attestation. Mismatched identity/trust or an occupied metadata destination fails.
+Check the disclosed balance/currency bytes, range totals and matching commitment digests. Serve omits cookie/account plaintext; Attest shows all local plaintext and saves private openings. All three processes exit after one completed attestation.
 
-### Attest a request copied from Chrome
+### Request copied from Chrome
 
-In Chrome DevTools, open **Network**, select a successful HTTPS request, then right-click it and choose **Copy → Copy as cURL (bash)**. Attest sends that request again through TLSNotary; it cannot attest a previously captured response.
+In DevTools → Network, choose **Copy → Copy as cURL (bash)**. Attest sends a new request; it cannot attest a captured response.
 
-Terminal 1: get or create the local verifier identity:
+Create the local verifier identity with the `certificates` example. Copy [the disclosure policy](examples/mbank/disclosure.json) to `.data/bank-disclosure.json` and edit its selectors for your response. Start `serve --server-name '<target hostname>'` and wait for `ready`.
 
-```sh
-cargo run --release --locked --example certificates
-```
-
-Create `.data/bank-disclosure.json` before running Attest. This example expects a `products` array whose first object has `AvailableBalance`, `currency`, `id` and `number` fields. Adjust the [selectors](#serve--attest) to your response; missing fields fail. The command preserves an existing file; edit it to change the policy.
-
-```sh
-(
-set -eC
-mkdir -p .data
-cat > .data/bank-disclosure.json <<'JSON'
-{
-  "reveal": {
-    "sent": ["start_line"],
-    "received": [
-      "start_line",
-      {"json": "/products/0/AvailableBalance"},
-      {"json": "/products/0/currency"},
-      {"json_key": "/products/0/id"},
-      {"json_key": "/products/0/number"}
-    ]
-  },
-  "commit": {
-    "received": [
-      {"json_value": "/products/0/id"},
-      {"json_value": "/products/0/number"}
-    ]
-  }
-}
-JSON
-)
-```
-
-This reveals the HTTP start lines, balance/currency members and ID/number keys, and creates two independently openable commitments to the ID/number values. All other bytes stay hidden from the verifier. These selections do not establish JSON ancestry or account ownership.
-
-Start Serve with the hostname from the copied URL, without the scheme, port or path:
-
-```sh
-cargo run --release --locked --bin proof-client -- serve --server-name '<target hostname>'
-```
-
-Wait for the `ready` event. In terminal 2:
-
-1. Paste the copied command and remove only the leading `curl` command name.
-2. Keep its URL, headers, cookies, method and body arguments, including their shell quoting.
-3. Ensure there is one `-H 'Connection: close'` header: add it if absent, or replace the copied `Connection: keep-alive` header.
-4. Place those arguments after the `attest` command and disclosure option shown below.
-
-Keep-alive can leave the prover apparently stuck waiting for the target connection to close, until the session deadline.
-
-The ellipses represent your copied arguments, not literal shell input:
-
-```sh
-cargo run --release --locked --bin proof-client -- attest \
-  --disclosure .data/bank-disclosure.json \
-  -H 'Connection: close' \
-  --url ... -H ... ...
-```
-
-The copied URL can remain positional or follow `--url`. Preserve `-X` and body arguments when present; do not add them to a request that has none. Unsupported options such as `--compressed` fail explicitly; this baseline requires identity encoding.
-
-The target presents its own HTTPS certificate, checked against the pinned Mozilla roots. The local verifier certificate does not replace it; do not use the fixture's `--target-ca` for a real target. Repeat the walkthrough for another attestation. To emit the private response instead of the report, select `--format raw` when executing and redirect stdout to a new file. This sends a new request; `inspect` cannot recover a response that was not retained.
+Replace the leading `curl` with `cargo run --release --locked --bin proof-client -- attest --disclosure .data/bank-disclosure.json`. Preserve supported URL, method, header, cookie and body arguments, including shell quoting. Replace any `Connection: keep-alive` with `Connection: close`. Unsupported curl options fail; remove `--compressed` and request identity encoding. Do not use the fixture's target CA for a real target.
 
 ## Prepare / prove / verify
 
@@ -223,9 +159,7 @@ cargo run --release --locked --bin proof-client -- verify --circuit examples/mer
 )
 ```
 
-After `prepare`, check the circuit IDs and input counts. After `prove`, check the self-verification stage and published artifact path. After `verify`, compare the reported public words with the independently constructed `public.json`. Add `--format json` for the machine representation.
-
-`prepare` is optional inspection; `prove` and `verify` independently prepare trusted sources. Its metadata is not a cached verification authority.
+Check prepared IDs/input counts, proof self-verification and the published path, then compare verified public words with `public.json`. `prepare` is optional inspection; every command prepares trusted sources independently.
 
 Public input is a JSON array. The private witness contains `private` field words and a `proofs` array. Verification requires the independently expected public input; a proof cannot choose the verifier's claim. `prepare` derives circuit and verifier-set IDs from the supplied definitions. Metadata assists input construction; it is not verification authority.
 
@@ -260,41 +194,9 @@ Eight sample leaves each contain eight pseudorandom field elements. Ordered Pose
 
 Set verification constrains actual-key membership and propagates the set ID from child to parent. The set ID hashes the two prepared keys and is pinned at native verification and fixed recursive references, avoiding a self-referential key constant. Both children use the same expected circuit ID. Merkle hashing, equal child heights and bounded increasing parent heights are ordinary DSL constraints.
 
-Run the complete tree walkthrough:
+The [recursive session workflow](crates/core/tests/recursion.rs) builds all eight leaves and three merge levels while reusing preparation. To construct parent inputs through the CLI, use `cargo run --release --locked --example merkle -- parent --help`: it consumes two child proofs and prepared metadata, emitting either public input or a witness. Prove height 1 with `merge-bases.json`, later heights with `merge-recursive.json`. Generate the final expected statement independently with the example's `public --height 3 --metadata <file>` command, then run `verify` against the recursive circuit.
 
-```sh
-(
-set -eC
-mkdir -p .data
-run_dir=$(mktemp -d .data/tree.XXXXXX)
-printf 'Outputs: %s\n' "$run_dir"
-cargo run --release --locked --bin proof-client -- prepare --circuit examples/merkle/merge-recursive.json --output "$run_dir/metadata.json"
-for i in 0 1 2 3 4 5 6 7; do
-  cargo run --release --locked --example merkle -- leaf --index "$i" public > "$run_dir/0-$i.public.json"
-  cargo run --release --locked --example merkle -- leaf --index "$i" witness > "$run_dir/0-$i.witness.json"
-  cargo run --release --locked --bin proof-client -- prove --circuit examples/merkle/base.json --public "$run_dir/0-$i.public.json" --witness "$run_dir/0-$i.witness.json" --output "$run_dir/0-$i.proof.json"
-done
-for height in 1 2 3; do
-  previous=$((height - 1))
-  count=$((8 >> height))
-  if [ "$height" -eq 1 ]; then circuit=merge-bases; else circuit=merge-recursive; fi
-  i=0
-  while [ "$i" -lt "$count" ]; do
-    left=$((2 * i))
-    right=$((left + 1))
-    for output in public witness; do
-      cargo run --release --locked --example merkle -- parent --left "$run_dir/$previous-$left.proof.json" --right "$run_dir/$previous-$right.proof.json" --metadata "$run_dir/metadata.json" "$output" > "$run_dir/$height-$i.$output.json"
-    done
-    cargo run --release --locked --bin proof-client -- prove --circuit "examples/merkle/$circuit.json" --public "$run_dir/$height-$i.public.json" --witness "$run_dir/$height-$i.witness.json" --output "$run_dir/$height-$i.proof.json"
-    i=$((i + 1))
-  done
-done
-cargo run --release --locked --example merkle -- public --height 3 --metadata "$run_dir/metadata.json" > "$run_dir/expected.json"
-cargo run --release --locked --bin proof-client -- verify --circuit examples/merkle/merge-recursive.json --public "$run_dir/expected.json" --proof "$run_dir/3-0.proof.json"
-)
-```
-
-`metadata.json` in the printed output directory is created once by `prepare` and only read thereafter. The example computes the expected root independently. Final verification needs the final proof, trusted circuit sources and expected statement. Metadata paths are relative to the entry directory where possible; IDs do not depend on filenames. Library sessions reuse preparation; CLI invocations prepare independently.
+Metadata is derived once and read thereafter; it is not verification authority. Final verification needs the final proof, trusted sources and expected public input. IDs do not depend on filenames. Library sessions reuse preparation; CLI invocations prepare independently.
 
 ## Chrome
 
@@ -357,4 +259,4 @@ npm test
 
 Tests also document usage: [CLI prepare/prove/verify](crates/cli/tests/e2e.rs), [TLS disclose/commit/inspect](crates/cli/tests/tls.rs), [recursive library proof session](crates/core/tests/recursion.rs), and [HTTP receive/resolve](crates/core/tests/disclosure.rs). Independent cryptographic conformance and adversarial proof checks remain because matching peers can share a bug. Mutation testing is not required.
 
-`npm test` exercises native-port ownership and the page/toolbar using a fake Chrome API and a DOM implementation; installed Chrome remains a manual integration check.
+`npm test` exercises native-port ordering, cancellation, cleanup and page workflows through a fake Chrome boundary and JSDOM; installed Chrome remains a manual check.

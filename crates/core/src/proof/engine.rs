@@ -132,6 +132,7 @@ pub(crate) fn run<R: Send>(
     threads: std::num::NonZeroUsize,
     operation: impl FnOnce() -> Result<R, Error> + Send,
 ) -> Result<R, Error> {
+    tracing::info!(phase = "workers_configured", workers = threads.get());
     let span = tracing::Span::current();
     let dispatch = tracing::dispatcher::get_default(Clone::clone);
     rayon::ThreadPoolBuilder::new()

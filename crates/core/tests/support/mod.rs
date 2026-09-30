@@ -17,7 +17,6 @@ pub fn worker(name: &str, deadline: Duration) {
     let mut child = Worker(
         Command::new(std::env::current_exe().unwrap())
             .args(["--exact", name, "--ignored", "--nocapture"])
-            .env("PROOF_CLIENT_WORKER", name)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())

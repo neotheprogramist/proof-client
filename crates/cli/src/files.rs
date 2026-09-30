@@ -26,8 +26,6 @@ pub enum FileError {
         path: String,
         source: serde_json::Error,
     },
-    #[error("cannot format run datetime")]
-    Datetime(#[from] time::error::Format),
     #[error("cannot {operation} {path}: {source}")]
     Io {
         operation: &'static str,
@@ -81,16 +79,11 @@ impl Output {
             &runs,
             std::fs::create_dir_all(&runs),
         )?;
-        let datetime =
-            time::OffsetDateTime::now_utc().format(time::macros::format_description!(
-                "[year][month][day]T[hour][minute][second].[subsecond digits:9]Z"
-            ))?;
         let directory = io_at(
             "create run",
             &runs,
             tempfile::Builder::new()
-                .prefix(&format!("{operation}.{datetime}"))
-                .rand_bytes(0)
+                .prefix(&format!("{operation}."))
                 .tempdir_in(&runs),
         )?;
         let mut output = Self::prepare(&directory.path().join("metadata.json"))?;
@@ -161,7 +154,7 @@ impl Output {
         if let Directory::Run(directory) = self.directory {
             drop(directory.keep());
         }
-        tracing::info!(event = "published", output = %self.path);
+        tracing::info!(event = "published", output = ?self.path);
         Ok(())
     }
 }

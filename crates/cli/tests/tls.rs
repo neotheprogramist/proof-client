@@ -237,12 +237,7 @@ async fn attest_disclose_open_and_inspect() {
             assert!(!String::from_utf8_lossy(&client.stderr).contains(secret));
             assert!(!String::from_utf8_lossy(&log).contains(secret));
         }
-        let inspected = support::output(
-            support::command()
-                .args(["inspect", "--run"])
-                .arg(dir.path()),
-        )
-        .await;
+        let inspected = support::output(support::command().arg("inspect").arg(&private_path)).await;
         assert!(
             inspected.status.success(),
             "{}",

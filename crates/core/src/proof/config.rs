@@ -89,12 +89,6 @@ impl StarkGenericConfig for Config {
     type Pcs = <Inner as StarkGenericConfig>::Pcs;
     type Challenge = E;
     type Challenger = <Inner as StarkGenericConfig>::Challenger;
-    fn lookup_proof_of_work_bits(&self) -> usize {
-        AUXILIARY_POW_BITS
-    }
-    fn ood_proof_of_work_bits(&self) -> usize {
-        AUXILIARY_POW_BITS
-    }
     fn pcs(&self) -> &Self::Pcs {
         self.inner.pcs()
     }

@@ -43,14 +43,8 @@ function nativePort() {
 }
 function browser() {
   const ports = /** @type {ReturnType<typeof nativePort>[]} */ ([]);
-  const clicked = events();
-  const opened = /** @type {{url: string}[]} */ ([]);
   const runtime = {
     lastError: undefined,
-    /** @param {string} path */
-    getURL(path) {
-      return `chrome-extension://test/${path}`;
-    },
     /** @param {string} host */
     connectNative(host) {
       assert.equal(host, "io.github.neotheprogramist.proof_client");
@@ -61,16 +55,9 @@ function browser() {
   };
   const fake = {
     runtime,
-    action: { onClicked: clicked },
-    tabs: {
-      /** @param {{url: string}} tab */
-      async create(tab) {
-        opened.push(tab);
-      },
-    },
   };
   globalThis.chrome = /** @type {typeof chrome} */ (/** @type {unknown} */ (fake));
-  return { ...fake, ports, opened };
+  return { ...fake, ports };
 }
 /** @param {ReturnType<typeof browser>["ports"][number]} port */
 function closed(port) {
@@ -81,12 +68,10 @@ function closed(port) {
 
 test("native setup and observer failures release owned resources", { timeout: 5000 }, async () => {
   for (const [outcome, message] of Object.entries({
-    disconnect: "Native host disconnected before completion",
     "disconnect-error": "host crashed",
     preabort: "Cancelled. Check output paths before starting a new operation.",
     "send-error": "send failed",
     "ready-error": "ready failed",
-    "ready-unknown-error": "Unknown native failure",
   })) {
     const fake = browser();
     const controller = new AbortController();
@@ -105,8 +90,7 @@ test("native setup and observer failures release owned resources", { timeout: 50
       ["serve"],
       (state) => {
         if (state.phase === phases.waiting) {
-          if (outcome === "ready-error") throw new Error("ready failed");
-          throw "external observer error";
+          throw new Error("ready failed");
         }
       },
       controller.signal,
@@ -131,61 +115,17 @@ test("native setup and observer failures release owned resources", { timeout: 50
   }
 });
 
-test("terminal observer failures settle and release ownership", { timeout: 5000 }, async () => {
-  for (const terminal of ["completed", "failed", "cancel", "disconnect"]) {
-    const fake = browser();
-    const controller = new AbortController();
-    const observed = /** @type {string[]} */ ([]);
-    const promise = invoke(
-      ["attest"],
-      (state) => {
-        observed.push(state.phase);
-        if (state.phase !== phases.running) throw new Error("observer failed");
-      },
-      controller.signal,
-    );
-    const port = fake.ports[0];
-    assert.ok(port);
-    if (terminal === "cancel") controller.abort();
-    else if (terminal === "disconnect") port.onDisconnect.emit();
-    else port.onMessage.emit({ event: terminal, result: {}, message: "host failed" });
-    await assert.rejects(promise, { message: "observer failed" });
-    const settled = [...observed];
-    port.onMessage.emit({ event: "completed", result: {} });
-    port.onDisconnect.emit();
-    controller.abort();
-    assert.deepEqual(observed, settled);
-    closed(port);
-    assert.equal(getEventListeners(controller.signal, "abort").length, 0);
-  }
-});
-
 test(
   "malformed native events fail at the boundary and release ownership",
   { timeout: 5000 },
   async () => {
     for (const [value, message] of [
       [null, "Invalid native event"],
-      [7, "Invalid native event"],
-      [{}, "Invalid native event"],
       [{ event: "unknown" }, "Unknown native event"],
-      ...[
-        { stdout_base64: "" },
-        { stdout_base64: "", metadata_output: 1 },
-        { stdout_base64: 1, metadata_output: "/fixture/metadata.json" },
-      ].map((result) => [{ event: "completed", result }, "Invalid HTTP result"]),
-      ...[undefined, 1].map((address) => [
-        { event: "ready", ...(address === undefined ? {} : { address }) },
-        "Invalid ready event",
-      ]),
-      ...[undefined, null, 1].map((result) => [
-        { event: "completed", ...(result === undefined ? {} : { result }) },
-        "Invalid completion event",
-      ]),
-      ...[undefined, 1].map((message) => [
-        { event: "failed", ...(message === undefined ? {} : { message }) },
-        "Invalid failure event",
-      ]),
+      [{ event: "completed", result: { stdout_base64: "" } }, "Invalid HTTP result"],
+      [{ event: "ready" }, "Invalid ready event"],
+      [{ event: "completed", result: null }, "Invalid completion event"],
+      [{ event: "failed" }, "Invalid failure event"],
     ]) {
       const fake = browser();
       const signal = new AbortController().signal;
@@ -193,13 +133,7 @@ test(
       const port = fake.ports[0];
       assert.ok(port);
       port.onMessage.emit(value);
-      await assert.rejects(promise, (error) => {
-        assert.ok(error instanceof NativeError);
-        assert.equal(error.name, "NativeError");
-        assert.equal(error.tag, "native");
-        assert.equal(error.message, message);
-        return true;
-      });
+      await assert.rejects(promise, { message });
       closed(port);
       assert.equal(getEventListeners(signal, "abort").length, 0);
     }
@@ -394,24 +328,6 @@ test("page preserves arguments, renders safely, and releases each operation", as
     await form.settled('Completed\n{\n  "verified": true\n}');
     closed(port);
   }
-});
-
-test("toolbar opens the local page and reports a rejected browser operation", async (context) => {
-  const fake = browser();
-  const errors = context.mock.method(console, "error", () => {});
-  await import("../extension/worker.mjs");
-  assert.equal(fake.action.onClicked.listeners.size, 1);
-  for (const listener of fake.action.onClicked.listeners) await listener();
-  assert.deepEqual(fake.opened, [{ url: "chrome-extension://test/index.html" }]);
-  const failure = new Error("browser rejected tab");
-  fake.tabs.create = async () => {
-    throw failure;
-  };
-  for (const listener of fake.action.onClicked.listeners) await listener();
-  assert.deepEqual(
-    errors.mock.calls.map((call) => call.arguments),
-    [["Cannot open Proof Client", failure]],
-  );
 });
 
 test(

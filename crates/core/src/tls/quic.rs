@@ -59,23 +59,9 @@ impl std::fmt::Debug for QuicError {
     }
 }
 
-#[derive(Serialize)]
-pub struct Receipt {
-    report: VerifiedReport,
-}
 #[derive(Serialize, Deserialize)]
 struct WireReceipt<T = ReportData> {
     report: T,
-}
-
-impl Receipt {
-    pub fn metadata(&self) -> &super::evidence::Evidence {
-        self.report().evidence()
-    }
-
-    pub fn report(&self) -> &ReportData {
-        self.report.data()
-    }
 }
 
 pub fn roots(pem: Option<&[u8]>) -> Result<RootCertStore, QuicError> {
@@ -175,7 +161,7 @@ impl Drop for Channel {
 
 pub struct Attestation {
     session: ProverOutput,
-    receipt: Receipt,
+    receipt: VerifiedReport,
 }
 
 #[derive(Serialize)]
@@ -191,25 +177,22 @@ impl Attestation {
         &self.session.selections
     }
     pub fn response(&self) -> &[u8] {
-        self.session.response()
+        &self.session.response
     }
     pub fn into_response(self) -> Vec<u8> {
         self.session.response
     }
     pub fn metadata(&self) -> PrivateMetadata<'_> {
         PrivateMetadata {
-            metadata: self.receipt.metadata(),
-            openings: self.session.openings(),
+            metadata: self.receipt.evidence(),
+            openings: &self.session.openings,
             selections: &self.session.selections,
         }
     }
     pub fn transcript(&self) -> &tlsn::transcript::Transcript {
-        self.session.transcript()
+        &self.session.transcript
     }
-    pub fn openings(&self) -> &[Opening] {
-        self.session.openings()
-    }
-    pub fn receipt(&self) -> &Receipt {
+    pub fn receipt(&self) -> &VerifiedReport {
         &self.receipt
     }
 }
@@ -238,7 +221,7 @@ pub async fn attest(
         let server = tokio::net::TcpStream::connect(request.address())
             .await?
             .compat();
-        let (io, mut session) = attest::attest_session(
+        let (io, session) = attest::attest_session(
             request,
             disclosure,
             io,
@@ -247,7 +230,6 @@ pub async fn attest(
             commitment_hash,
         )
         .await?;
-        session.report = session.report.accepted();
         let mut io = io;
         let encoded = Frame::encode(&WireReceipt {
             report: &session.report,
@@ -265,8 +247,8 @@ pub async fn attest(
                 tracing::info!(phase = "session_closed");
                 Ok(Attestation {
                     session,
-                    receipt: Receipt {
-                        report: VerifiedReport(receipt.report),
+                    receipt: VerifiedReport {
+                        report: receipt.report,
                     },
                 })
             }
@@ -308,7 +290,7 @@ impl Verifier {
         Ok(self.socket.local_addr()?)
     }
     #[tracing::instrument(skip_all)]
-    pub async fn verify(self) -> Result<Receipt, QuicError> {
+    pub async fn verify(self) -> Result<VerifiedReport, QuicError> {
         let incoming = self.socket.accept().await.ok_or(QuicError::Closed)?;
         self.socket.set_server_config(None);
         let result = tokio::time::timeout(attest::SESSION_TIMEOUT, async {
@@ -318,18 +300,17 @@ impl Verifier {
             let io = tokio::io::join(recv, send).compat();
             let (mut io, report) =
                 attest::verify_session(io, self.roots, self.commitment_policy).await?;
-            if report.data().server_name() != self.name.as_str() {
+            if report.evidence().server_name() != self.name.as_str() {
                 return Err(QuicError::Mismatch);
             }
-            let (sent_bytes, received_bytes) = report.data().lengths();
+            let (sent_bytes, received_bytes) = report.evidence().lengths();
             tracing::info!(phase = "verified", sent_bytes, received_bytes);
-            let receipt = Receipt { report };
-            let frame = Frame::encode(&receipt)?;
+            let frame = Frame::encode(&report)?;
             frame.write(&mut io).await?;
             io.close().await?;
             expect_end(&mut io).await?;
             connection.0.close(0u8.into(), b"complete");
-            Ok(receipt)
+            Ok(report)
         })
         .await;
         complete(&self.socket, result).await

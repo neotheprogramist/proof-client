@@ -6,7 +6,7 @@
 )]
 use super::*;
 use crate::proof::{
-    program::{Job, Session, prove},
+    program::{Session, prove},
     source::{Circuit, FORMAT, Source},
 };
 use serde_json::json;
@@ -17,12 +17,9 @@ fn source(factor: u32) -> serde_json::Value {
 }
 fn artifact(circuit: serde_json::Value, value: u32) -> Artifact {
     prove(
-        Job::parse(
-            Circuit::parse(&serde_json::to_vec(&circuit).unwrap()).unwrap(),
-            PublicInput::parse(&serde_json::to_vec(&[value]).unwrap()).unwrap(),
-            br#"{"private":[7],"proofs":[]}"#,
-        )
-        .unwrap(),
+        Circuit::parse(&serde_json::to_vec(&circuit).unwrap()).unwrap(),
+        PublicInput::parse(&serde_json::to_vec(&[value]).unwrap()).unwrap(),
+        br#"{"private":[7],"proofs":[]}"#,
         NonZeroUsize::new(4).unwrap(),
     )
     .unwrap()

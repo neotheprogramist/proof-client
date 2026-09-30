@@ -654,6 +654,12 @@ pub async fn receive(
             if end > limit {
                 return Err(DisclosureError::Limit);
             }
+            tracing::info!(
+                phase = "http_response_framed",
+                wire_bytes = end,
+                body_bytes = decoder.body.len(),
+                reached_eof = read == 0
+            );
             return Ok(decoder.finish(raw, end));
         }
         if raw.len() > limit {
@@ -663,7 +669,7 @@ pub async fn receive(
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct SelectionResolution {
+struct SelectionResolution {
     selector: serde_json::Value,
     ranges: Vec<Range<usize>>,
 }
@@ -678,6 +684,67 @@ pub struct SelectionAudit {
     pub(super) received: SelectionMap,
 }
 impl SelectionAudit {
+    pub(super) fn validate(
+        &self,
+        evidence: &super::evidence::Evidence,
+        complete: bool,
+    ) -> Result<(), super::evidence::RecordError> {
+        use super::evidence::RecordError;
+        use tlsn::{rangeset::ops::Set, transcript::Direction};
+        for (direction, map, length, segments) in [
+            (
+                Direction::Sent,
+                &self.sent,
+                evidence.sent_len,
+                &evidence.sent,
+            ),
+            (
+                Direction::Received,
+                &self.received,
+                evidence.received_len,
+                &evidence.received,
+            ),
+        ] {
+            for selection in map.reveal.iter().chain(&map.commit) {
+                let mut end = 0;
+                for range in &selection.ranges {
+                    if range.start < end || range.start >= range.end || range.end > length {
+                        return Err(RecordError::Selections);
+                    }
+                    end = range.end;
+                }
+            }
+            let revealed = map
+                .reveal
+                .iter()
+                .flat_map(|s| &s.ranges)
+                .collect::<RangeSet<_>>();
+            // PROOF: Record::parse bounds segments before validating mappings.
+            let disclosed = segments
+                .iter()
+                .map(|s| s.start..s.start + s.bytes.len())
+                .collect::<RangeSet<_>>();
+            let committed = map
+                .commit
+                .iter()
+                .map(|s| RangeSet::from(s.ranges.clone()))
+                .collect::<Vec<_>>();
+            let hashes = evidence
+                .commitments
+                .iter()
+                .filter(|c| c.direction == direction)
+                .collect::<Vec<_>>();
+            if (complete && revealed != disclosed)
+                || committed.iter().any(|r| {
+                    r.is_empty() || !r.is_disjoint(&revealed) || !hashes.iter().any(|c| c.idx == *r)
+                })
+                || hashes.iter().any(|c| !committed.contains(&c.idx))
+            {
+                return Err(RecordError::Selections);
+            }
+        }
+        Ok(())
+    }
     pub fn entries(
         &self,
     ) -> impl Iterator<Item = (&str, &str, &serde_json::Value, &[Range<usize>])> {
@@ -730,18 +797,6 @@ impl ResolvedDisclosure {
     pub fn into_parts(self) -> (RangeSet<usize>, Vec<RangeSet<usize>>, SelectionMap) {
         (self.revealed, self.committed, self.selections)
     }
-
-    pub fn commitments(&self) -> &[RangeSet<usize>] {
-        &self.committed
-    }
-}
-
-pub fn select(
-    raw: &[u8],
-    direction: Direction<'_>,
-    config: &MessageDisclosure,
-) -> Result<RangeSet<usize>, DisclosureError> {
-    Ok(resolve(raw, direction, config, &MessageDisclosure::default())?.revealed)
 }
 
 pub fn resolve(

@@ -75,6 +75,8 @@ pub struct Record {
 }
 #[derive(Debug, thiserror::Error)]
 pub enum RecordError {
+    #[error("saved selector ranges are invalid or disagree with recorded evidence")]
+    Selections,
     #[error("invalid saved TLS record")]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
@@ -107,6 +109,9 @@ impl Record {
             received,
         };
         evidence.display_bytes()?;
+        if let Some(selections) = &wire.selections {
+            selections.validate(&evidence, complete)?;
+        }
         let evidence = if complete {
             RecordedEvidence::Complete(evidence)
         } else {
