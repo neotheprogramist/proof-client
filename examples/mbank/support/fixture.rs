@@ -29,13 +29,13 @@ pub enum Error {
 
 pub struct SampleData {
     pub response_cookie: String,
-    pub account: String,
+    pub number: String,
 }
 impl SampleData {
     pub fn body(&self) -> String {
         format!(
-            r#"{{"products":[{{"AvailableBalance":42.1200,"currency":"PLN","account":"{}"}}]}}"#,
-            self.account
+            r#"{{"products":[{{"AvailableBalance":42.1200,"currency":"PLN","number":"{}"}}]}}"#,
+            self.number
         )
     }
 }
@@ -45,7 +45,7 @@ pub fn sample_data() -> SampleData {
     let mut rng = StdRng::seed_from_u64(SEED);
     SampleData {
         response_cookie: format!("session={:016x}", rng.random::<u64>()),
-        account: format!("demo-account-{:016x}", rng.random::<u64>()),
+        number: "00 0000 0000 0000 0000 0000 0000".into(),
     }
 }
 

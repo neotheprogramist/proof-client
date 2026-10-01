@@ -21,7 +21,6 @@ for (const form of document.querySelectorAll("form")) {
       throw new NativeError("Commitment controls are incomplete");
     const updateBudget = () => {
       budget.disabled = suite.value === "blake3";
-      budget.required = !budget.disabled;
     };
     suite.addEventListener("change", updateBudget);
     updateBudget();

@@ -67,15 +67,15 @@ Publication and inspection share `MAX_RECORD_BYTES` in `crates/core/src/tls/evid
 
 Live commitment numbers follow transcript order, sent before received. Match openings to commitments by direction and ranges, not array position. The prover's selector report uses the same mapping; these local labels do not authenticate JSON ancestry. Earlier saved records retain their original grouping.
 
-| Selection                               | Meaning                                                               |
-| --------------------------------------- | --------------------------------------------------------------------- |
-| `{"bytes": [start, end]}`               | Nonempty half-open range in the original transcript                   |
-| `"start_line"`                          | Request line or final status line, including CRLF                     |
-| `{"header": "content-type"}`            | Every matching complete header line, including CRLF; case insensitive |
-| `"body"`                                | Payload bytes, excluding chunk framing                                |
-| `{"json": "/products/0/balance"}`       | Object member, or value at the root/array index                       |
-| `{"json_key": "/products/0/account"}`   | Quoted object key; root/array elements have no key                    |
-| `{"json_value": "/products/0/account"}` | Serialized value, including quotes for strings                        |
+| Selection                              | Meaning                                                               |
+| -------------------------------------- | --------------------------------------------------------------------- |
+| `{"bytes": [start, end]}`              | Nonempty half-open range in the original transcript                   |
+| `"start_line"`                         | Request line or final status line, including CRLF                     |
+| `{"header": "content-type"}`           | Every matching complete header line, including CRLF; case insensitive |
+| `"body"`                               | Payload bytes, excluding chunk framing                                |
+| `{"json": "/products/0/balance"}`      | Object member, or value at the root/array index                       |
+| `{"json_key": "/products/0/number"}`   | Quoted object key; root/array elements have no key                    |
+| `{"json_value": "/products/0/number"}` | Serialized value, including quotes for strings                        |
 
 Selectors use JSON Pointer escaping (`~0` for `~`, `~1` for `/`). Original bytes, including decimal spelling and string escapes, are preserved across HTTP chunks. Duplicate decoded keys fail. There are no wildcard queries, implicit structural disclosures or policy-file discovery.
 
@@ -83,11 +83,13 @@ TLSN authenticates selected bytes and positions, not hidden JSON ancestry, accou
 
 Receipt validation, QUIC closure, metadata publication and stdout delivery are separate transitions. Metadata is saved before stdout; a save or broken pipe failure can follow successful remote verification. Published files remain. There are no automatic retries.
 
+Attest completes MPC setup before opening the target TCP connection, so preprocessing does not consume the target’s idle handshake window. Stderr records `mpc_setup_started`, `mpc_setup_completed`, `target_connecting`, `target_connected` and `http_response_framed`.
+
 Idle listeners wait for a client. `SESSION_TIMEOUT` in `crates/core/src/tls/attest.rs` bounds the connected session; Quinn's default idle timeout can expire sooner during silent computation. Synchronous circuit work is not preempted by a cooperative deadline. After closure, `draining_transport` waits for Quinn’s RTT-dependent three-PTO timer, outside the session deadline; `transport_drained` confirms shutdown. HTTP framing can finish before EOF, but completing the TLS session still requires peer closure. Use `Connection: close`; keep-alive can wait until the session deadline. Surplus HTTP bytes are discarded.
 
 ### KoalaBear commitments
 
-The default is `poseidon2-koalabear-16-pad10-v1`. Serve requires `--max-commitment-permutations N`, a positive operator-selected budget, even when no commitments are requested. A missing budget fails before I/O. For BLAKE3, add `--commitment-hash blake3` to both peers and omit the budget. Mismatched suites and excess work fail before commitment hashing; no suite is substituted. Protocol and dependency-integrity hashes remain unchanged.
+The default is `poseidon2-koalabear-16-pad10-v1`. Serve has a bounded default work budget (see `serve --help`), sufficient for one commitment of up to 43 bytes. Override it explicitly with `--max-commitment-permutations N` for larger or multiple selections. For BLAKE3, add `--commitment-hash blake3` to both peers and omit the budget. Mismatched suites and excess work fail before commitment hashing; no suite is substituted. Protocol and dependency-integrity hashes remain unchanged.
 
 For selections of lengths `n_i`, the required budget is `sum(ceil((n_i + 53) / 24))`. Count each distinct commitment separately and add its discontiguous range lengths. For example, separate 34- and 90-byte selections need ten permutations. This bounds work, not peak memory; see the [measurements](#verification) before choosing a budget.
 
@@ -111,15 +113,14 @@ cargo run --release --locked --example fixture
 
 Identities live in `.data/identity/` (verifier) and `.data/fixture/` (target); neither enters a system trust store. Initialization is locked, reuses valid pairs and rejects partial pairs. Unix keys are owner-only. Use `--directory` for isolation; wait for `ready`.
 
-Terminal 2: start Serve with the fixture’s budget of four permutations (its quoted account value is 31 bytes):
+Terminal 2: start Serve. The fixture’s quoted `number` value is 34 bytes and fits the default commitment budget:
 
 ```sh
 cargo run --release --locked --bin proof-client -- serve \
-  --target-ca .data/fixture/target.pem --server-name localhost \
-  --max-commitment-permutations 4
+  --target-ca .data/fixture/target.pem --server-name localhost
 ```
 
-Check Serve's expected target and wait for its `ready` event on stderr. Terminal 3: run Attest. The cookie is a synthetic placeholder, not a fixture credential; the fixture does not authenticate clients. The checked-in policy hides cookies, reveals balance/currency and the account key, and commits the account value.
+Check Serve's expected target and wait for its `ready` event on stderr. Terminal 3: run Attest. The cookie is a synthetic placeholder, not a fixture credential; the fixture does not authenticate clients. The checked-in policy hides cookies, reveals balance/currency and the `number` key, and commits its value.
 
 ```sh
 cargo run --release --locked --bin proof-client -- attest \
@@ -132,15 +133,54 @@ cargo run --release --locked --bin proof-client -- attest \
   --data-raw '{}'
 ```
 
-Check the disclosed balance/currency bytes, range totals and matching commitment digests. Serve omits cookie/account plaintext; Attest shows all local plaintext and saves private openings. All three processes exit after one completed attestation.
+Check the disclosed balance/currency bytes, range totals and matching commitment digests. Serve omits cookie/number plaintext; Attest shows all local plaintext and saves private openings. All three processes exit after one completed attestation.
 
-### Request copied from Chrome
+### End-to-end flow with an HTTPS service
 
-In DevTools → Network, choose **Copy → Copy as cURL (bash)**. Attest sends a new request; it cannot attest a captured response.
+Use a request that succeeds independently against your intended target. In Chrome DevTools → Network, choose **Copy → Copy as cURL (bash)**. Attest sends a new request; it cannot attest a captured response. The target must support the TLS 1.2/HTTP/1.1 baseline above.
 
-Create the local verifier identity with the `certificates` example. Copy [the disclosure policy](examples/mbank/disclosure.json) to `.data/bank-disclosure.json` and edit its selectors for your response. Start `serve --server-name '<target hostname>' --max-commitment-permutations <budget>` with your positive work budget and wait for `ready`.
+1. Create the local verifier identity:
 
-Replace the leading `curl` with `cargo run --release --locked --bin proof-client -- attest --disclosure .data/bank-disclosure.json`. Preserve supported URL, method, header, cookie and body arguments, including shell quoting. Replace any `Connection: keep-alive` with `Connection: close`. Unsupported curl options fail; remove `--compressed` and request identity encoding. Do not use the fixture's target CA for a real target.
+   ```sh
+   cargo run --release --locked --example certificates
+   ```
+
+2. Write `.data/disclosure.json` for the actual response. For a body shaped like `{"value":42,"id":"example"}`, this policy reveals the status line and `value` member, and commits the serialized `id` value:
+
+   ```json
+   {
+     "reveal": { "received": ["start_line", { "json": "/value" }] },
+     "commit": { "received": [{ "json_value": "/id" }] }
+   }
+   ```
+
+   Replace these pointers with fields you intend to disclose or commit. Include headers only when the response actually contains them; HTTP/1.1 responses need not contain `Content-Length`. Compute the commitment budget from the serialized selected bytes using the formula above.
+
+3. In another terminal, start Serve with the independently expected target hostname. Replace `api.example.com` with your target; wait for `ready`:
+
+   ```sh
+   cargo run --release --locked --bin proof-client -- serve \
+     --server-name api.example.com
+   ```
+
+   Add `--max-commitment-permutations N` only if your selections exceed the default. Public HTTPS targets use the bundled Mozilla roots; do not pass the fixture CA.
+
+4. Replace the copied command’s leading `curl` with:
+
+   ```sh
+   cargo run --release --locked --bin proof-client -- attest \
+     --disclosure .data/disclosure.json
+   ```
+
+   Append its supported URL, method, header, cookie and body arguments, preserving shell quoting. Keep the original JSON body and `content-type` when present. Replace `Connection: keep-alive` with `Connection: close`; add it if absent. Remove `--compressed` and any compressed `Accept-Encoding` value; only identity encoding is supported. A minimal GET invocation is:
+
+   ```sh
+   cargo run --release --locked --bin proof-client -- attest \
+     --disclosure .data/disclosure.json \
+     --url https://api.example.com/resource -H 'Connection: close'
+   ```
+
+5. Check MPC setup and target connection stages, response lengths, resolved selectors and admitted commitment work. Compare the disclosed ranges and commitment digests in both final reports, and confirm `receipt_matched`. Inspect the reported metadata paths with `inspect`; Attest’s record includes private openings. Keep credentials and private records local. A rerun sends another request and may receive different bytes; blinded digests also change between runs.
 
 ## Prepare / prove / verify
 
@@ -227,7 +267,7 @@ Register this native-host manifest:
 
 Chrome does not expand `~` or environment variables. Escape Windows backslashes. See [native messaging registration](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging) for custom profiles.
 
-Click the toolbar action. All native file paths must be absolute; terminal paths may be relative. Verify the base example using `examples/merkle/base.json` and the `public.json` and `proof.json` files in its printed output directory, converted to absolute paths. To prove again, use that directory’s `witness.json` and a new proof output path. For TLS, follow the local fixture identity/setup commands, start the fixture in a terminal, then start Serve in the form using the absolute data directory and explicit target-CA path and positive permutation budget, wait for Ready, then enter its curl-style request arguments as one JSON array, for example `["--url", "https://localhost:7443/balance", "-b", "session=SYNTHETIC_PLACEHOLDER", "--data-raw", "{}"]`. Select the same commitment suite on both forms; BLAKE3 disables the budget. Empty strings are preserved. The array is appended after the connection and data-directory arguments and parsed by the CLI.
+Click the toolbar action. All native file paths must be absolute; terminal paths may be relative. Verify the base example using `examples/merkle/base.json` and the `public.json` and `proof.json` files in its printed output directory, converted to absolute paths. To prove again, use that directory’s `witness.json` and a new proof output path. For TLS, follow the local fixture identity/setup commands, start the fixture in a terminal, then start Serve in the form using the absolute data directory and explicit target-CA path, wait for Ready, then enter its curl-style request arguments as one JSON array, for example `["--url", "https://localhost:7443/balance", "-b", "session=SYNTHETIC_PLACEHOLDER", "--data-raw", "{}"]`. Select the same commitment suite on both forms. Leave the budget blank for the CLI default; BLAKE3 disables it. Empty strings are preserved. The array is appended after the connection and data-directory arguments and parsed by the CLI.
 
 Check Cancel and tab close while Serve waits: its port becomes reusable and no metadata is published. Forced process termination can leave an empty run directory. After success, published files remain. Each operation owns one native port/process; tab close disconnects them. Only `nativeMessaging` permission is required.
 

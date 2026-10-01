@@ -71,14 +71,15 @@
                 <option value="">CLI default (Poseidon2–KoalaBear)</option>
                 <option value="blake3">BLAKE3</option>
               </select>
-              <label for="serve-budget">Permutation budget per session (KoalaBear)</label>
+              <label for="serve-budget"
+                >Permutation budget (KoalaBear; blank uses CLI default)</label
+              >
               <input
                 id="serve-budget"
                 name="max-commitment-permutations"
                 type="number"
                 min="1"
                 step="1"
-                required
               />
               <label for="serve-listen">Listen address, e.g. 127.0.0.1:7047</label
               ><input id="serve-listen" name="listen" type="text" />

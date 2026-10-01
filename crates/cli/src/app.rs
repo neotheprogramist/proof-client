@@ -124,8 +124,13 @@ pub enum Command {
         /// Admit only this commitment hash; peers must select the same suite.
         #[arg(long, default_value_t = CommitmentHash::default(), value_parser = commitment_hash_parser())]
         commitment_hash: CommitmentHash,
-        /// Required for the default KoalaBear suite; total permutation budget per session.
-        #[arg(long)]
+        /// Total KoalaBear permutation budget per session; omit for BLAKE3.
+        // Policy: admit one opening up to 43 bytes by default.
+        #[arg(
+            long,
+            default_value = "4",
+            default_value_if("commitment_hash", "blake3", None)
+        )]
         max_commitment_permutations: Option<NonZeroUsize>,
         /// Local QUIC listener; accepts one attestation.
         #[arg(long, default_value = VERIFIER_ADDRESS)]

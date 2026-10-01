@@ -256,7 +256,6 @@ test("page preserves arguments, renders safely, and releases each operation", as
 
   const serve = operation("serve");
   const fake = browser();
-  serve.set("max-commitment-permutations", "12");
   serve.set("server-name", "localhost");
   serve.set("data-dir", "/fixture");
   serve.submit();
@@ -266,15 +265,7 @@ test("page preserves arguments, renders safely, and releases each operation", as
   assert.deepEqual(port.sent, [
     {
       protocol: "proof-client/12",
-      args: [
-        "serve",
-        "--max-commitment-permutations",
-        "12",
-        "--server-name",
-        "localhost",
-        "--data-dir",
-        "/fixture",
-      ],
+      args: ["serve", "--server-name", "localhost", "--data-dir", "/fixture"],
     },
   ]);
   port.onMessage.emit({ event: "ready", address: "localhost" });

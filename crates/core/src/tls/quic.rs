@@ -215,9 +215,15 @@ pub async fn attest(
         tracing::info!(phase = "connected");
         let (send, recv) = connection.0.open_bi().await?;
         let io = tokio::io::join(recv, send).compat();
-        let server = tokio::net::TcpStream::connect(request.address())
-            .await?
-            .compat();
+        let (host, port) = request.address();
+        let address = (host.to_owned(), port);
+        // Defer target I/O until MPC setup finishes to avoid idle handshake timeouts.
+        let server = async move {
+            tracing::info!(phase = "target_connecting");
+            let socket = tokio::net::TcpStream::connect(address).await?;
+            tracing::info!(phase = "target_connected");
+            Ok(socket.compat())
+        };
         let (io, session) = attest::attest_session(
             request,
             disclosure,

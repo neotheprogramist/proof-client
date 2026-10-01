@@ -32,8 +32,8 @@ async fn attest_disclose_open_and_inspect() {
         let public_path = dir.path().join("verified.json");
         let policy_path = dir.path().join("disclosure.json");
         fs::write(&policy_path, serde_json::to_vec(&json!({
-            "reveal":{"sent":["start_line"],"received":["start_line",{"json":"/products/0/AvailableBalance"},{"json_key":"/products/0/account"}]},
-            "commit":{"sent":[{"header":"x-proof"}],"received":[{"json_value":"/products/0/account"},{"json_value":"/products/0/currency"}]}
+            "reveal":{"sent":["start_line"],"received":["start_line",{"json":"/products/0/AvailableBalance"},{"json_key":"/products/0/number"}]},
+            "commit":{"sent":[{"header":"x-proof"}],"received":[{"json_value":"/products/0/number"},{"json_value":"/products/0/currency"}]}
         })).unwrap()).unwrap();
         let mut serve = support::command();
         serve
@@ -136,7 +136,7 @@ async fn attest_disclose_open_and_inspect() {
             (
                 "received",
                 &response,
-                b"HTTP/1.1 200 OK\r\n\"AvailableBalance\":42.1200\"account\"".as_slice(),
+                b"HTTP/1.1 200 OK\r\n\"AvailableBalance\":42.1200\"number\"".as_slice(),
             ),
         ] {
             let mut visible = Vec::new();
@@ -219,7 +219,7 @@ async fn attest_disclose_open_and_inspect() {
         for expected in [
             b"x-proof: first\r\nx-proof: second\r\n".to_vec(),
             br#""PLN""#.to_vec(),
-            format!("\"{}\"", data.account).into_bytes(),
+            format!("\"{}\"", data.number).into_bytes(),
         ] {
             assert!(plaintexts.contains(&expected));
         }
@@ -228,7 +228,7 @@ async fn attest_disclose_open_and_inspect() {
         assert!(prover.contains("verifier receipt matched"));
         assert!(verified.contains("42.1200"));
         assert!(verified.contains("not established"));
-        for secret in ["PRIVATE_COOKIE", &data.account, &data.response_cookie] {
+        for secret in ["PRIVATE_COOKIE", &data.number, &data.response_cookie] {
             assert!(prover.contains(secret));
             assert!(!verified.contains(secret));
             assert!(!String::from_utf8_lossy(&client.stderr).contains(secret));
@@ -242,7 +242,7 @@ async fn attest_disclose_open_and_inspect() {
         );
         let text = String::from_utf8(inspected.stdout).unwrap();
         assert!(text.contains("live verification was not performed"));
-        assert!(!text.contains(&data.account));
+        assert!(!text.contains(&data.number));
         assert_eq!(
             serde_json::from_slice::<Value>(&fs::read(&private_path).unwrap()).unwrap(),
             private

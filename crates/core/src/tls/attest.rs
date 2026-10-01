@@ -5,7 +5,10 @@ use crate::tls::disclosure::{self, Disclosure, DisclosureError};
 use futures::{AsyncRead, AsyncWrite, AsyncWriteExt, TryFutureExt};
 use http::{HeaderName, HeaderValue, Method};
 use serde::{Deserialize, Serialize};
-use std::{future::IntoFuture, time::Duration};
+use std::{
+    future::{Future, IntoFuture},
+    time::Duration,
+};
 use tlsn::{
     Session,
     config::{
@@ -342,7 +345,7 @@ pub(super) async fn attest_session<T, S>(
     request: Request,
     disclosure: Disclosure,
     verifier_socket: T,
-    server_socket: S,
+    server_socket: impl Future<Output = std::io::Result<S>>,
     roots: RootCertStore,
     commitment_hash: CommitmentHash,
 ) -> Result<(T, ProverOutput), AttestError>
@@ -353,6 +356,7 @@ where
     let session = Session::new(verifier_socket)?;
     let (driver, mut handle) = session.split();
     let operation = async {
+        tracing::info!(phase = "mpc_setup_started");
         let prover = handle
             .new_prover(ProverConfig::builder().build()?)?
             .commit(
@@ -364,6 +368,8 @@ where
                     .build()?,
             )
             .await?;
+        tracing::info!(phase = "mpc_setup_completed");
+        let server_socket = server_socket.await?;
         let server_name = ServerName::Dns(request.domain.clone());
         let (mut connection, prover) = prover.connect(
             TlsClientConfig::builder()
